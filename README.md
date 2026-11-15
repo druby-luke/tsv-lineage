@@ -1,6 +1,6 @@
 > **Fork by [druby-luke](https://github.com/druby-luke), branch `tsv-dev`.** Changes compared to [salaman/tsv-lineage](https://github.com/salaman/tsv-lineage):
 > - **Mic-mute button + camera slider as power button**: new `buttons/tsv-buttons` service (uinput KEY_POWER, EPOLLWAKEUP), `sepolicy/tsv_buttons.te`, kernel patch `0029` (gpio-keys `wakeup-source`)
-> - **Mesa GMEM rendering** on the Adreno 506 (overrides the qcom-common `sysmem` quirk in `config/init.thinksmart.rc`): launcher jank 52% → 8%, Settings p50 19 → 10 ms
+> - **Mesa GMEM rendering** on the Adreno 506 (overrides the qcom-common `sysmem` quirk in `config/init.thinksmart.rc`): launcher jank 48% → 16%, Settings p50 19 → 12 ms (GMEM alone; with 0.5× animations launcher 8%)
 > - **Animations 0.5× and no blur** as defaults (SettingsProvider overlay, `ro.surface_flinger.supports_background_blur=0`)
 > - **Build fix**: timekeep seapp_contexts patch removed (merged upstream as `f6b2914`)
 >
