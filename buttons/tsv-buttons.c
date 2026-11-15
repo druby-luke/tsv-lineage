@@ -6,9 +6,12 @@
  *   SW_MUTE_DEVICE        - latching: 1 = mic muted (in hardware), 0 = mic live
  *   SW_CAMERA_LENS_COVER  - level: 1 = closed, 0 = open
  * Android ignores those switches for screen power. This daemon watches the
- * "gpio-keys" input device and injects a KEY_POWER tap through uinput:
- *   - mute button: one tap per change (it latches: 1 = mic muted, 0 = mic live)
- *   - privacy slider: one tap per change (both directions)
+ * "gpio-keys" input device and, on every change of either switch, injects a key
+ * through uinput. The action per switch is configurable (read on every event):
+ *   persist.vendor.tsv.mute_action    (mic-mute button, latching: 1 = muted, 0 = live)
+ *   persist.vendor.tsv.slider_action  (camera privacy slider: 1 = closed, 0 = open)
+ * values: power (toggle, default) | wake (screen on only) | sleep (screen off only) | none
+ * e.g.  adb shell setprop persist.vendor.tsv.mute_action none
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -23,6 +26,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/system_properties.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -61,6 +65,7 @@ static int create_power_key(void) {
     setup.id.product = 0x0001;
     strncpy(setup.name, "tsv-power-buttons", UINPUT_MAX_NAME_SIZE - 1);
     if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0 || ioctl(fd, UI_SET_KEYBIT, KEY_POWER) < 0 ||
+        ioctl(fd, UI_SET_KEYBIT, KEY_WAKEUP) < 0 || ioctl(fd, UI_SET_KEYBIT, KEY_SLEEP) < 0 ||
         ioctl(fd, UI_DEV_SETUP, &setup) < 0 || ioctl(fd, UI_DEV_CREATE) < 0) {
         close(fd);
         return -1;
@@ -83,12 +88,22 @@ static long long now_ms(void) {
     return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
 }
 
-static void power_tap(int out, const char *why) {
-    emit(out, EV_KEY, KEY_POWER, 1);
+/* Returns the key for the configured action, or 0 for "none". Unknown values fall back to power. */
+static int action_key(const char *prop) {
+    char value[PROP_VALUE_MAX] = "";
+    __system_property_get(prop, value);
+    if (strcmp(value, "none") == 0) return 0;
+    if (strcmp(value, "wake") == 0) return KEY_WAKEUP;
+    if (strcmp(value, "sleep") == 0) return KEY_SLEEP;
+    return KEY_POWER;
+}
+
+static void key_tap(int out, int key, const char *why) {
+    emit(out, EV_KEY, key, 1);
     emit(out, EV_SYN, SYN_REPORT, 0);
-    emit(out, EV_KEY, KEY_POWER, 0);
+    emit(out, EV_KEY, key, 0);
     emit(out, EV_SYN, SYN_REPORT, 0);
-    ALOGI("power tap (%s)", why);
+    ALOGI("%s tap (%s)", key == KEY_POWER ? "power" : key == KEY_WAKEUP ? "wake" : "sleep", why);
 }
 
 int main(void) {
@@ -112,7 +127,7 @@ int main(void) {
         ALOGE("epoll setup failed: %s", strerror(errno));
         return 1;
     }
-    ALOGI("ready: mute button and privacy slider -> KEY_POWER");
+    ALOGI("ready: mute button / privacy slider -> configurable key (persist.vendor.tsv.*_action)");
     long long last = 0;
     for (;;) {
         struct epoll_event got;
@@ -129,13 +144,19 @@ int main(void) {
             const struct input_event *ev = &events[i];
             if (ev->type != EV_SW) continue;
             const char *why = NULL;
-            if (ev->code == SW_MUTE_DEVICE) why = ev->value ? "mic muted" : "mic unmuted";
-            else if (ev->code == SW_CAMERA_LENS_COVER) why = ev->value ? "slider closed" : "slider opened";
-            if (!why) continue;
+            int key = 0;
+            if (ev->code == SW_MUTE_DEVICE) {
+                why = ev->value ? "mic muted" : "mic unmuted";
+                key = action_key("persist.vendor.tsv.mute_action");
+            } else if (ev->code == SW_CAMERA_LENS_COVER) {
+                why = ev->value ? "slider closed" : "slider opened";
+                key = action_key("persist.vendor.tsv.slider_action");
+            }
+            if (!why || !key) continue;
             long long t = now_ms();
             if (t - last < DEBOUNCE_MS) continue;
             last = t;
-            power_tap(out, why);
+            key_tap(out, key, why);
         }
     }
 }

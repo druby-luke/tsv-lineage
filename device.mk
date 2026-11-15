@@ -130,3 +130,9 @@ PRODUCT_VENDOR_PROPERTIES += \
     ro.vendor.iio.proximity.quirks=no-event,no-trig
 
 include $(DEVICE_PATH)/config/firmware-files.mk
+
+# Faster app starts on the Cortex-A53 cores: compile system_server and Settings fully at build time,
+# and fully compile apps that are installed later (e.g. Home Assistant, Kiosk Satellite).
+PRODUCT_SYSTEM_SERVER_COMPILER_FILTER := speed
+PRODUCT_DEXPREOPT_SPEED_APPS += Settings
+PRODUCT_SYSTEM_PROPERTIES += pm.dexopt.install=speed

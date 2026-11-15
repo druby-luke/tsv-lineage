@@ -1,0 +1,2 @@
+# persist.vendor.tsv.*: button actions for tsv-buttons (power|wake|sleep|none)
+vendor_public_prop(vendor_tsv_buttons_prop)
