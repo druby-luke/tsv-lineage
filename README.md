@@ -3,8 +3,6 @@
 > - **Mesa GMEM rendering** on the Adreno 506 (overrides the qcom-common `sysmem` quirk in `config/init.thinksmart.rc`): launcher jank 48% → 16%, Settings p50 19 → 12 ms (GMEM alone; with 0.5× animations launcher 8%)
 > - **Animations 0.5× and no blur** as defaults (SettingsProvider overlay, `ro.surface_flinger.supports_background_blur=0`)
 > - **Build fix**: timekeep seapp_contexts patch removed (merged upstream as `f6b2914`)
->
-> Images, flash tutorial and test kit: **[druby-luke/thinksmart-view-lineageos24](https://github.com/druby-luke/thinksmart-view-lineageos24)**
 
 # ThinkSmart View: mainline LineageOS
 
