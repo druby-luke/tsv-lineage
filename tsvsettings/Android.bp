@@ -7,6 +7,8 @@ android_app {
     platform_apis: true,
     privileged: true,
     system_ext_specific: true,
+    // No OTA server exists for this unofficial build; the updater only does failed checks.
+    overrides: ["Updater"],
     static_libs: [
         "androidx.preference_preference",
         "SettingsLibCollapsingToolbarBaseActivity",
