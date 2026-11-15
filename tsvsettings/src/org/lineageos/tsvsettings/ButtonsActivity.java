@@ -6,12 +6,13 @@ package org.lineageos.tsvsettings;
 import android.os.Bundle;
 import android.os.SystemProperties;
 
-import androidx.fragment.app.FragmentActivity;
 import androidx.preference.ListPreference;
 import androidx.preference.PreferenceFragmentCompat;
 
+import com.android.settingslib.collapsingtoolbar.CollapsingToolbarBaseActivity;
+
 /** Lets the user choose what the mic-mute button and privacy slider do (read by vendor tsv-buttons). */
-public class ButtonsActivity extends FragmentActivity {
+public class ButtonsActivity extends CollapsingToolbarBaseActivity {
 
     static final String PROP_MUTE = "persist.sys.tsv.mute_action";
     static final String PROP_SLIDER = "persist.sys.tsv.slider_action";
@@ -19,18 +20,13 @@ public class ButtonsActivity extends FragmentActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (getActionBar() != null) getActionBar().setDisplayHomeAsUpEnabled(true);
+        // SettingsLib base activity: Settings look, collapsing toolbar, edge-to-edge insets handled.
         if (savedInstanceState == null) {
             getSupportFragmentManager().beginTransaction()
-                    .replace(android.R.id.content, new ButtonsFragment())
+                    .replace(com.android.settingslib.collapsingtoolbar.R.id.content_frame,
+                            new ButtonsFragment())
                     .commit();
         }
-    }
-
-    @Override
-    public boolean onNavigateUp() {
-        finish();
-        return true;
     }
 
     public static class ButtonsFragment extends PreferenceFragmentCompat {

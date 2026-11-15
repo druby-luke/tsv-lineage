@@ -6,7 +6,7 @@
     <application
         android:label="@string/app_name"
         android:icon="@drawable/ic_buttons"
-        android:theme="@style/TsvSettingsTheme">
+        android:theme="@style/Theme.SubSettingsBase">
 
         <activity
             android:name=".ButtonsActivity"
