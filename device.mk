@@ -136,3 +136,6 @@ include $(DEVICE_PATH)/config/firmware-files.mk
 PRODUCT_SYSTEM_SERVER_COMPILER_FILTER := speed
 PRODUCT_DEXPREOPT_SPEED_APPS += Settings
 PRODUCT_SYSTEM_PROPERTIES += pm.dexopt.install=speed
+
+# Camera app (the mini tablet config leaves it out); camera works through libcamera.
+PRODUCT_PACKAGES += Aperture

@@ -3,4 +3,6 @@
 <resources>
     <fraction name="def_window_animation_scale">50%</fraction>
     <fraction name="def_window_transition_scale">50%</fraction>
+    <!-- Wall panel: fixed orientation. Auto-rotate keeps the accelerometer streaming (~16 IRQ/s) all the time. -->
+    <bool name="def_accelerometer_rotation">false</bool>
 </resources>
