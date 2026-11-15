@@ -13,8 +13,8 @@ import androidx.preference.PreferenceFragmentCompat;
 /** Lets the user choose what the mic-mute button and privacy slider do (read by vendor tsv-buttons). */
 public class ButtonsActivity extends FragmentActivity {
 
-    static final String PROP_MUTE = "persist.vendor.tsv.mute_action";
-    static final String PROP_SLIDER = "persist.vendor.tsv.slider_action";
+    static final String PROP_MUTE = "persist.sys.tsv.mute_action";
+    static final String PROP_SLIDER = "persist.sys.tsv.slider_action";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {

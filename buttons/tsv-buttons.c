@@ -8,10 +8,10 @@
  * Android ignores those switches for screen power. This daemon watches the
  * "gpio-keys" input device and, on every change of either switch, injects a key
  * through uinput. The action per switch is configurable (read on every event):
- *   persist.vendor.tsv.mute_action    (mic-mute button, latching: 1 = muted, 0 = live)
- *   persist.vendor.tsv.slider_action  (camera privacy slider: 1 = closed, 0 = open)
+ *   persist.sys.tsv.mute_action    (mic-mute button, latching: 1 = muted, 0 = live)
+ *   persist.sys.tsv.slider_action  (camera privacy slider: 1 = closed, 0 = open)
  * values: power (toggle, default) | wake (screen on only) | sleep (screen off only) | none
- * e.g.  adb shell setprop persist.vendor.tsv.mute_action none
+ * e.g.  adb shell setprop persist.sys.tsv.mute_action none
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -127,7 +127,7 @@ int main(void) {
         ALOGE("epoll setup failed: %s", strerror(errno));
         return 1;
     }
-    ALOGI("ready: mute button / privacy slider -> configurable key (persist.vendor.tsv.*_action)");
+    ALOGI("ready: mute button / privacy slider -> configurable key (persist.sys.tsv.*_action)");
     long long last = 0;
     for (;;) {
         struct epoll_event got;
@@ -147,10 +147,10 @@ int main(void) {
             int key = 0;
             if (ev->code == SW_MUTE_DEVICE) {
                 why = ev->value ? "mic muted" : "mic unmuted";
-                key = action_key("persist.vendor.tsv.mute_action");
+                key = action_key("persist.sys.tsv.mute_action");
             } else if (ev->code == SW_CAMERA_LENS_COVER) {
                 why = ev->value ? "slider closed" : "slider opened";
-                key = action_key("persist.vendor.tsv.slider_action");
+                key = action_key("persist.sys.tsv.slider_action");
             }
             if (!why || !key) continue;
             long long t = now_ms();

@@ -7,4 +7,4 @@ allow tsv_buttons input_device:dir r_dir_perms;
 allow tsv_buttons input_device:chr_file r_file_perms;
 allow tsv_buttons uhid_device:chr_file rw_file_perms;
 allow tsv_buttons self:capability2 block_suspend;
-get_prop(tsv_buttons, vendor_tsv_buttons_prop)
+get_prop(tsv_buttons, tsv_buttons_prop)

@@ -1,2 +1,0 @@
-# ThinkSmartSettings (platform app, system_app domain) writes the button actions.
-set_prop(system_app, vendor_tsv_buttons_prop)
