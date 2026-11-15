@@ -94,6 +94,7 @@ PRODUCT_SYSTEM_PROPERTIES += \
 
 PRODUCT_VENDOR_PROPERTIES += \
     ro.hardware.camera=libcamera \
+    ro.surface_flinger.supports_background_blur=0 \
     ro.vendor.qcom.soc.enable_modem_services=0 \
     vendor.powerhal.disp.idle_support=0 \
     vendor.powerhal.interaction.min=1000 \

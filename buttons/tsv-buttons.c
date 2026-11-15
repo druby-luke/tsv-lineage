@@ -3,11 +3,11 @@
  * slider act as a power key, like the LineageOS 15.1 (downstream) build did.
  *
  * The mainline gpio-keys node reports both as switches (EV_SW):
- *   SW_MUTE_DEVICE        - momentary: 1 on press, 0 on release (the mute itself is in hardware)
+ *   SW_MUTE_DEVICE        - latching: 1 = mic muted (in hardware), 0 = mic live
  *   SW_CAMERA_LENS_COVER  - level: 1 = closed, 0 = open
  * Android ignores those switches for screen power. This daemon watches the
  * "gpio-keys" input device and injects a KEY_POWER tap through uinput:
- *   - mute button: one tap per press (value 1)
+ *   - mute button: one tap per change (it latches: 1 = mic muted, 0 = mic live)
  *   - privacy slider: one tap per change (both directions)
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -129,7 +129,7 @@ int main(void) {
             const struct input_event *ev = &events[i];
             if (ev->type != EV_SW) continue;
             const char *why = NULL;
-            if (ev->code == SW_MUTE_DEVICE && ev->value == 1) why = "mic-mute button";
+            if (ev->code == SW_MUTE_DEVICE) why = ev->value ? "mic muted" : "mic unmuted";
             else if (ev->code == SW_CAMERA_LENS_COVER) why = ev->value ? "slider closed" : "slider opened";
             if (!why) continue;
             long long t = now_ms();
