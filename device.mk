@@ -43,6 +43,7 @@ PRODUCT_PACKAGES += \
     fstab.thinksmart.ramdisk \
     init.thinksmart.rc \
     init.recovery.thinksmart.rc \
+    ThinkSmartSettings \
     tsv-buttons \
     watchdogd \
     watchdogd.recovery
