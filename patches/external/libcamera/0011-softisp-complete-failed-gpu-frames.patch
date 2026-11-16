@@ -1,0 +1,357 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Sun, 15 Nov 2026 16:00:35 -0800
+Subject: [PATCH] softisp: complete failed GPU frames
+
+Complete failed EGL debayer frames instead of leaving their input and
+output buffers queued indefinitely. Preserve the captured sequence and
+timestamp, mark the output FrameError and clear its used length.
+
+Emit invalid statistics for failed frames so the IPA still produces the
+metadata required by the simple pipeline to complete each request.
+Explicitly invalidate failed statistics even on scheduled statistics
+frames; never reuse an earlier frame's samples as valid. Route a failed
+CPU mapping for statistics through the same error path.
+
+Release CPU DMA access and wait for any submitted GPU work before
+returning either buffer. A draw can report an error after other GPU
+accesses have already been queued. Leave the successful rendering,
+statistics cadence and optical parameters unchanged.
+
+Add a sensor-free EGL regression test with real DMA buffers for input
+mapping failure, output import failure and a GL error after draw
+submission, including recovery on subsequent successful frames and
+stale-statistics rejection. Register it with Meson when GPU SoftISP is
+enabled and as the Android libcamera_debayer_egl_test target.
+
+Base-commit: df8e348d64b4932a0676256ed24f0da3ee9438bc
+---
+diff --git a/Android.bp b/Android.bp
+--- a/Android.bp
++++ b/Android.bp
+@@ -763,6 +763,27 @@
+     test_suites: ["device-tests"],
+ }
+ 
++cc_test {
++    name: "libcamera_debayer_egl_test",
++    defaults: ["libcamera_private_defaults"],
++    gtest: false,
++    local_include_dirs: [
++        "src/libcamera",
++        "test/libtest",
++    ],
++    srcs: [
++        "test/software_isp/debayer_egl.cpp",
++        "test/libtest/test.cpp",
++    ],
++    shared_libs: [
++        "libcamera",
++        "libcamera-base",
++        "libEGL",
++        "libGLESv2",
++    ],
++    test_suites: ["device-tests"],
++}
++
+ cc_binary {
+     name: "cam",
+     defaults: ["libcamera_defaults"],
+diff --git a/include/libcamera/internal/software_isp/swstats_cpu.h b/include/libcamera/internal/software_isp/swstats_cpu.h
+--- a/include/libcamera/internal/software_isp/swstats_cpu.h
++++ b/include/libcamera/internal/software_isp/swstats_cpu.h
+@@ -58,7 +58,7 @@
+ 	void setWindow(const Rectangle &window);
+ 	void setDebayerParams(const DebayerParams &params, bool lscAvailable);
+ 	void startFrame(uint32_t frame);
+-	void finishFrame(uint32_t frame, uint32_t bufferId);
++	void finishFrame(uint32_t frame, uint32_t bufferId, bool valid = true);
+ 	void processFrame(uint32_t frame, uint32_t bufferId, MappedFrameBuffer &input);
+ 
+ 	void processLine0(uint32_t frame, unsigned int y, const uint8_t *src[], unsigned int statsBufferIndex = 0)
+diff --git a/src/libcamera/software_isp/debayer_egl.cpp b/src/libcamera/software_isp/debayer_egl.cpp
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -669,23 +669,30 @@
+ 			inDmaSyncer.emplace(input->planes()[0].fd, DmaSyncer::SyncType::Read);
+ 			inMapped.emplace(input, MappedFrameBuffer::MapFlag::Read);
+ 		}
++		if (!inMapped->isValid()) {
++			LOG(Debayer, Error) << "mmap-ing statistics buffer failed";
++			goto error;
++		}
+ 		stats_->setDebayerParams(params, lscEnabled_);
+ 		stats_->processFrame(frame, 0, inMapped.value());
+ 	}
++	goto done;
++
++error:
++	metadata.status = FrameMetadata::FrameError;
++	metadata.planes()[0].bytesused = 0;
++	/* Failed frames still need IPA metadata to complete the request. */
++	stats_->finishFrame(frame, 0, false);
++
++done:
+ 	inDmaSyncer.reset();
+ 
++	/* A failed draw may still have queued GPU access to the buffers. */
+ 	egl_.syncOutput();
+ 	bench_.finishFrame();
+ 
+ 	outputBufferReady.emit(output);
+ 	inputBufferReady.emit(input);
+-
+-	return;
+-
+-error:
+-	bench_.finishFrame();
+-	metadata.status = FrameMetadata::FrameError;
+-	return;
+ }
+ 
+ int DebayerEGL::start()
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -478,12 +478,13 @@
+  * \brief Finish statistics calculation for the current frame
+  * \param[in] frame The frame number
+  * \param[in] bufferId ID of the statistics buffer
++ * \param[in] valid Whether processing succeeded, or false to discard statistics
+  *
+  * This may only be called after a successful setWindow() call.
+  */
+-void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+-{
+-	bool valid = frame % kStatPerNumFrames == 0;
++void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId, bool valid)
++{
++	valid = valid && frame % kStatPerNumFrames == 0;
+ 
+ 	if (valid) {
+ 		sharedStats_->sum_ = RGB<uint64_t>({ 0, 0, 0 });
+diff --git a/test/meson.build b/test/meson.build
+--- a/test/meson.build
++++ b/test/meson.build
+@@ -36,6 +36,7 @@
+ subdir('process')
+ subdir('py')
+ subdir('serialization')
++subdir('software_isp')
+ subdir('stream')
+ subdir('v4l2_compat')
+ subdir('v4l2_subdevice')
+diff --git a/test/software_isp/debayer_egl.cpp b/test/software_isp/debayer_egl.cpp
+new file mode 100644
+--- /dev/null
++++ b/test/software_isp/debayer_egl.cpp
+@@ -0,0 +1,186 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++
++#include <algorithm>
++#include <fcntl.h>
++#include <functional>
++#include <iostream>
++#include <memory>
++#include <string>
++#include <sys/mman.h>
++#include <vector>
++
++#include <libcamera/camera_manager.h>
++#include <libcamera/formats.h>
++#include <libcamera/stream.h>
++
++#include <libcamera/base/memfd.h>
++
++#include "libcamera/internal/dma_buf_allocator.h"
++#include "libcamera/internal/framebuffer.h"
++
++#include "software_isp/debayer_egl.h"
++
++#include "test.h"
++
++using namespace libcamera;
++
++class DebayerEGLTest : public Test
++{
++	int run() override
++	{
++		EGLDisplay display = eGL::probeDisplay();
++		if (display == EGL_NO_DISPLAY) {
++			std::cerr << "No EGL display available" << std::endl;
++			return TestSkip;
++		}
++
++		auto stats = std::make_unique<SwStatsCpu>(cm_);
++		if (!stats->isValid())
++			return TestFail;
++		stats->statsReady.connect(this, &DebayerEGLTest::statsReady);
++		void *statsMapping = mmap(nullptr, sizeof(SwIspStats), PROT_READ,
++					  MAP_SHARED, stats->getStatsFD().get(), 0);
++		if (statsMapping == MAP_FAILED) {
++			std::cerr << "Failed to map statistics" << std::endl;
++			return TestFail;
++		}
++		stats_ = static_cast<const SwIspStats *>(statsMapping);
++
++		debayer_ = std::make_unique<DebayerEGL>(std::move(stats), cm_, display);
++		debayer_->inputBufferReady.connect(this, &DebayerEGLTest::inputReady);
++		debayer_->outputBufferReady.connect(this, &DebayerEGLTest::outputReady);
++
++		StreamConfiguration inputCfg;
++		inputCfg.pixelFormat = formats::SBGGR8;
++		inputCfg.size = { 16, 16 };
++		inputCfg.stride = 16;
++		inputCfg.bufferCount = 2;
++		StreamConfiguration outputCfg;
++		outputCfg.pixelFormat = formats::XRGB8888;
++		outputCfg.size = debayer_->sizes(inputCfg.pixelFormat, inputCfg.size).max;
++		std::tie(outputCfg.stride, outputCfg.frameSize) =
++			debayer_->strideAndFrameSize(outputCfg.pixelFormat, outputCfg.size);
++		outputCfg.bufferCount = 2;
++		if (debayer_->configure(inputCfg, { std::cref(outputCfg) }, false, false) ||
++		    debayer_->start())
++			return TestFail;
++		started_ = true;
++
++		DmaBufAllocator allocator(DmaBufAllocator::DmaBufAllocatorFlag::SystemHeap |
++					  DmaBufAllocator::DmaBufAllocatorFlag::UDmaBuf);
++		if (!allocator.isValid()) {
++			std::cerr << "No DMA buffer allocator available" << std::endl;
++			return TestSkip;
++		}
++		std::vector<std::unique_ptr<FrameBuffer>> inputs, outputs;
++		if (allocator.exportBuffers(1, { 256 }, &inputs) != 1 ||
++		    allocator.exportBuffers(1, { outputCfg.frameSize }, &outputs) != 1)
++			return TestFail;
++
++		{
++			DmaSyncer sync(inputs[0]->planes()[0].fd, DmaSyncer::SyncType::Write);
++			MappedFrameBuffer mapping(inputs[0].get(), MappedFrameBuffer::MapFlag::Write);
++			if (!mapping.isValid())
++				return TestFail;
++			std::fill(mapping.planes()[0].begin(), mapping.planes()[0].end(), 128);
++		}
++
++		UniqueFD backing = MemFd::create("unreadable-frame", 256);
++		if (!backing.isValid())
++			return TestFail;
++		const std::string path = "/proc/self/fd/" + std::to_string(backing.get());
++		SharedFD invalidFd{ UniqueFD(open(path.c_str(), O_WRONLY | O_CLOEXEC)) };
++		if (!invalidFd.isValid())
++			return TestFail;
++		const std::vector<FrameBuffer::Plane> invalidPlanes{
++			{ .fd = invalidFd, .offset = 0, .length = 256 },
++		};
++		FrameBuffer invalid(invalidPlanes);
++		FrameBuffer *input = inputs[0].get();
++		FrameBuffer *output = outputs[0].get();
++
++		if (checkFrame(0, input, output, false) ||
++		    checkFrame(4, &invalid, output, true) ||
++		    checkFrame(8, input, output, false) ||
++		    checkFrame(9, input, &invalid, true) ||
++		    checkFrame(12, input, output, false))
++			return TestFail;
++
++		/* Fail after GPU work has been submitted, not only during import. */
++		glEnable(0xffffffff);
++		if (checkFrame(16, input, output, true) ||
++		    checkFrame(20, input, output, false))
++			return TestFail;
++
++		return TestPass;
++	}
++
++	int checkFrame(uint32_t frame, FrameBuffer *input, FrameBuffer *output, bool failed)
++	{
++		inputCount_ = outputCount_ = statsCount_ = 0;
++		input_ = output_ = nullptr;
++		auto &inputMetadata = input->_d()->metadata();
++		inputMetadata.status = FrameMetadata::FrameSuccess;
++		inputMetadata.sequence = frame;
++		inputMetadata.timestamp = 1000000ULL * (frame + 1);
++		auto &outputMetadata = output->_d()->metadata();
++		outputMetadata.status = FrameMetadata::FrameSuccess;
++		outputMetadata.planes()[0].bytesused = 123;
++
++		debayer_->process(frame, input, output, {});
++		const bool validStats = !failed && frame % SwStatsCpu::kStatPerNumFrames == 0;
++		const FrameMetadata::Status expectedStatus = failed ?
++			FrameMetadata::FrameError : FrameMetadata::FrameSuccess;
++		if (inputCount_ != 1 || outputCount_ != 1 || statsCount_ != 1 ||
++		    input_ != input || output_ != output || statsFrame_ != frame ||
++		    stats_->valid != validStats || outputMetadata.status != expectedStatus ||
++		    outputMetadata.sequence != frame ||
++		    outputMetadata.timestamp != inputMetadata.timestamp ||
++		    outputMetadata.planes()[0].bytesused !=
++			    (failed ? 0 : output->planes()[0].length)) {
++			std::cerr << "Incorrect frame completion for frame " << frame << std::endl;
++			return TestFail;
++		}
++		return TestPass;
++	}
++
++	void inputReady(FrameBuffer *input)
++	{
++		input_ = input;
++		inputCount_++;
++	}
++
++	void outputReady(FrameBuffer *output)
++	{
++		output_ = output;
++		outputCount_++;
++	}
++
++	void statsReady(uint32_t frame, [[maybe_unused]] uint32_t bufferId)
++	{
++		statsFrame_ = frame;
++		statsCount_++;
++	}
++
++	void cleanup() override
++	{
++		if (started_)
++			debayer_->stop();
++		debayer_.reset();
++		if (stats_)
++			munmap(const_cast<SwIspStats *>(stats_), sizeof(SwIspStats));
++	}
++
++	CameraManager cm_;
++	std::unique_ptr<DebayerEGL> debayer_;
++	bool started_ = false;
++	const SwIspStats *stats_ = nullptr;
++	FrameBuffer *input_ = nullptr;
++	FrameBuffer *output_ = nullptr;
++	unsigned int inputCount_ = 0;
++	unsigned int outputCount_ = 0;
++	unsigned int statsCount_ = 0;
++	uint32_t statsFrame_ = 0;
++};
++
++TEST_REGISTER(DebayerEGLTest)
+diff --git a/test/software_isp/meson.build b/test/software_isp/meson.build
+new file mode 100644
+--- /dev/null
++++ b/test/software_isp/meson.build
+@@ -0,0 +1,18 @@
++# SPDX-License-Identifier: CC0-1.0
++
++if not softisp_enabled
++    subdir_done()
++endif
++
++if not mesa_works
++    subdir_done()
++endif
++
++exe = executable('debayer-egl', 'debayer_egl.cpp',
++                 dependencies : [libcamera_private, libegl, libglesv2],
++                 implicit_include_directories : false,
++                 link_with : test_libraries,
++                 include_directories : [test_includes_internal,
++                                        '../../src/libcamera/'])
++
++test('debayer-egl', exe, is_parallel : false)

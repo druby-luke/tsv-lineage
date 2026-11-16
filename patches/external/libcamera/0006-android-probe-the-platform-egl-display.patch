@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Sat, 14 Nov 2026 22:03:48 -0800
+Subject: [PATCH] android: probe the platform EGL display for GPU SoftISP
+
+Adapt haretic's Android EGL display selection to the upstream renderer.
+Use Android's default EGL display instead of the Linux surfaceless
+platform entry point, retaining upstream's GLES context initialization.
+
+Do not copy MediaTek DMA formats, Rabbit shaders or device-specific
+image processing.
+
+Base-commit: df8e348d64b4932a0676256ed24f0da3ee9438bc
+Source: https://github.com/haretic/android_external_libcamera/commit/507821791c091bdbb9ef782c651c82d65b9dc511
+---
+diff --git a/src/libcamera/egl.cpp b/src/libcamera/egl.cpp
+--- a/src/libcamera/egl.cpp
++++ b/src/libcamera/egl.cpp
+@@ -315,9 +315,14 @@
+ {
+ 	EGLDisplay display;
+ 
++#ifdef __ANDROID__
++	/* Android selects its EGL implementation through the default display. */
++	display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
++#else
+ 	display = eglGetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA,
+ 					EGL_DEFAULT_DISPLAY,
+ 					nullptr);
++#endif
+ 
+ 	if (display == EGL_NO_DISPLAY) {
+ 		LOG(eGL, Info) << "Unable to get EGL display";

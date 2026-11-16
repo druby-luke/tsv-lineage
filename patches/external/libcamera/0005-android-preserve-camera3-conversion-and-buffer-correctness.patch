@@ -1,0 +1,2418 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Sat, 14 Nov 2026 22:03:48 -0800
+Subject: [PATCH] android: preserve Camera3 conversion and buffer correctness
+
+Rebase the working Android adapter from TI
+3becb16c1fa22d79a4d7eeb75a36fc895b4b7abf and the previous ThinkSmart
+queue, not TI's ISP algorithms. Preserve Alessandro Fontana's Android
+fixes and the local conversion, metadata and shared-buffer corrections.
+
+Keep RGB-to-NV12/JPEG conversion, derived stream sizes, DMA-heap
+backing, mapper-provided YUV layout, full-range YUV dataspace and
+correct JPEG trailer placement. Preserve release-fence ownership,
+shared-source lifetime and failed-frame errors, locking the guarded
+post-processing map during failed-request cleanup. An unsupported YUV
+conversion must complete only with an error.
+
+Retain frame-duration requests, capability metadata, configured mounting
+orientation and failed-provider rejection. Adapt spans, ValueNode YAML
+parsing, renamed properties and optional orientation results to upstream
+v0.8.0. Publish the full native PixelArrayArea size and the active
+rectangle's left/top/width/height, which Android's Rect marshaler
+converts into Java right/bottom edges. Preserve native active-area
+offsets without adding them twice. Reject missing or inconsistent
+geometry explicitly.
+
+Allow pipeline-assigned allocation defaults during stream validation:
+upstream simple reports Adjusted when assigning an initially unspecified
+buffer count. Keep rejecting changed stream count, sizes, pixel formats,
+sensor orientation, explicit color spaces or explicit buffer counts.
+Report configuration rejection at error severity, and use the validated
+buffer count for Android max_buffers and allocation.
+
+Allow a per-camera min-frame-rate in camera_hal.yaml to bound the
+advertised automatic FPS range, rejecting invalid values or a floor
+above the camera's maximum YUV rate. The ThinkSmart configuration
+selects 10-30 FPS, restoring the earlier port's approximately 100 ms
+low-light frame budget through Android requests, not a global sensor or
+IPA cap. The Camera app deliberately selects the lowest advertised
+minimum compatible with 30 FPS; exposing 1-30 FPS with working VBLANK
+control otherwise permits near-one-second frames. This is an explicit
+Android responsiveness policy, not Lenovo calibration. Leave other
+cameras' defaults and the physical/manual sensor limits unchanged.
+
+The optional physical-camera and stream-combination callbacks must
+report unsupported operations rather than return success without
+implementing them. Do not import the old custom AWB, AGC, highlight,
+hot-pixel or lookup-table policies.
+
+The local source baseline was the ThinkSmart integration at
+787b8bcd6f003e7dcf0fc186f3e2bc7c4a899630 with its existing applied
+camera queue.
+
+Base-commit: df8e348d64b4932a0676256ed24f0da3ee9438bc
+Source: https://git.ti.com/cgit/android/external-libcamera/commit/?id=3becb16c1fa22d79a4d7eeb75a36fc895b4b7abf
+Source: https://github.com/alessandro-fontana/android_external_libcamera/commit/080f0ae7b16b40903e3a8b526cdf862bdcd8142b
+Source: https://github.com/alessandro-fontana/android_external_libcamera/commit/b0462e8dafc19667d7dc43bb60c655802d41eb3d
+Source: https://github.com/alessandro-fontana/android_external_libcamera/commit/ce5ca6a297a4d22757b03082562bac0087f22a32
+Source: https://github.com/alessandro-fontana/android_external_libcamera/commit/4a556cd1b80fdad0261d390c4e81956f13e44965
+Source: https://github.com/alessandro-fontana/android_external_libcamera/commit/d7d2d833add63b75983aa0d657fb269a315f90c9
+---
+diff --git a/src/android/camera3_hal.cpp b/src/android/camera3_hal.cpp
+--- a/src/android/camera3_hal.cpp
++++ b/src/android/camera3_hal.cpp
+@@ -65,6 +65,26 @@
+ 	return 0;
+ }
+ 
++static int hal_get_physical_camera_info([[maybe_unused]] int physical_camera_id,
++					camera_metadata_t **static_metadata)
++{
++	if (static_metadata)
++		*static_metadata = nullptr;
++	return -EINVAL;
++}
++
++
++static int hal_is_stream_combination_supported([[maybe_unused]] int camera_id,
++					       [[maybe_unused]] const camera_stream_combination_t *streams)
++{
++	return -ENOSYS;
++}
++
++static void hal_notify_device_state_change([[maybe_unused]] uint64_t deviceState)
++{
++	return;
++}
++
+ /*------------------------------------------------------------------------------
+  * Android Camera Device
+  */
+@@ -95,7 +115,7 @@
+ camera_module_t HAL_MODULE_INFO_SYM = {
+ 	.common = {
+ 		.tag = HARDWARE_MODULE_TAG,
+-		.module_api_version = CAMERA_MODULE_API_VERSION_2_4,
++		.module_api_version = CAMERA_MODULE_API_VERSION_2_5,
+ 		.hal_api_version = HARDWARE_HAL_API_VERSION,
+ 		.id = CAMERA_HARDWARE_MODULE_ID,
+ 		.name = "libcamera camera HALv3 module",
+@@ -112,5 +132,8 @@
+ 	.open_legacy = hal_open_legacy,
+ 	.set_torch_mode = hal_set_torch_mode,
+ 	.init = hal_init,
++	.get_physical_camera_info = hal_get_physical_camera_info,
++	.is_stream_combination_supported = hal_is_stream_combination_supported,
++	.notify_device_state_change = hal_notify_device_state_change,
+ 	.reserved = {},
+ };
+diff --git a/src/android/camera_buffer.h b/src/android/camera_buffer.h
+--- a/src/android/camera_buffer.h
++++ b/src/android/camera_buffer.h
+@@ -7,11 +7,10 @@
+ 
+ #pragma once
+ 
+-#include <span>
+-
+ #include <hardware/camera3.h>
+ 
+ #include <libcamera/base/class.h>
++#include <span>
+ #include <libcamera/geometry.h>
+ #include <libcamera/pixel_format.h>
+ 
+@@ -63,7 +62,7 @@
+ {									\
+ 	return const_cast<Private *>(_d())->plane(plane);		\
+ }									\
+-std::span<uint8_t> CameraBuffer::plane(unsigned int plane)		\
++std::span<uint8_t> CameraBuffer::plane(unsigned int plane)			\
+ {									\
+ 	return _d()->plane(plane);					\
+ }									\
+diff --git a/src/android/camera_capabilities.cpp b/src/android/camera_capabilities.cpp
+--- a/src/android/camera_capabilities.cpp
++++ b/src/android/camera_capabilities.cpp
+@@ -11,14 +11,12 @@
+ #include <array>
+ #include <cmath>
+ #include <map>
+-#include <span>
+ #include <stdint.h>
+ #include <type_traits>
+ 
+ #include <hardware/camera3.h>
+ 
+ #include <libcamera/base/log.h>
+-#include <libcamera/base/utils.h>
+ 
+ #include <libcamera/control_ids.h>
+ #include <libcamera/controls.h>
+@@ -125,6 +123,25 @@
+ 			"RAW16"
+ 		}
+ 	},
++};
++
++/**
++ * \var yuvConversions
++ * \brief list of supported pixel formats for an input pixel format
++ *
++ * \todo This should be retrieved statically from yuv/post_processor_yuv instead
++ */
++const std::map<PixelFormat, const std::vector<PixelFormat>> yuvConversions = {
++	{ formats::YUYV, { formats::NV12 } },
++	{ formats::XRGB8888, { formats::NV12 } },
++};
++
++/*
++ * Formats the libjpeg encoder reads as they are: a BLOB stream fed by one of
++ * them goes to the JPEG post-processor without a conversion step.
++ */
++const std::vector<PixelFormat> jpegDirectInputs = {
++	formats::XRGB8888,
+ };
+ 
+ const std::map<camera_metadata_enum_android_info_supported_hardware_level, std::string>
+@@ -402,11 +419,12 @@
+ }
+ 
+ int CameraCapabilities::initialize(std::shared_ptr<Camera> camera,
+-				   int orientation, int facing)
++				   int orientation, int facing, int minFrameRate)
+ {
+ 	camera_ = camera;
+ 	orientation_ = orientation;
+ 	facing_ = facing;
++	minFrameRate_ = minFrameRate;
+ 	rawStreamAvailable_ = false;
+ 	maxFrameDuration_ = 0;
+ 
+@@ -564,49 +582,138 @@
+ 
+ 		/*
+ 		 * JPEG is always supported, either produced directly by the
+-		 * camera, or encoded in the HAL.
++		 * camera, or encoded in the HAL. Try to find MJPEG support first,
++		 * but allow fallback to software encoding via conversion.
+ 		 */
++		bool formatMapped = false;
++		PixelFormat mappedFormat;
++
+ 		if (androidFormat == HAL_PIXEL_FORMAT_BLOB) {
+-			formatsMap_[androidFormat] = formats::MJPEG;
+-			LOG(HAL, Debug) << "Mapped Android format "
+-					<< camera3Format.name << " to "
+-					<< formats::MJPEG
+-					<< " (fixed mapping)";
+-			continue;
+-		}
+-
+-		/*
+-		 * Test the libcamera formats that can produce images
+-		 * compatible with the format defined by Android.
+-		 */
+-		PixelFormat mappedFormat;
+-		for (const PixelFormat &pixelFormat : libcameraFormats) {
+-
+-			LOG(HAL, Debug) << "Testing " << pixelFormat;
++			/* First try to find direct MJPEG support */
++			for (const PixelFormat &pixelFormat : libcameraFormats) {
++				if (pixelFormat == formats::MJPEG) {
++					cfg.pixelFormat = pixelFormat;
++					CameraConfiguration::Status status = cameraConfig->validate();
++					if (status != CameraConfiguration::Invalid &&
++					    cfg.pixelFormat == pixelFormat) {
++						formatsMap_[androidFormat] = formats::MJPEG;
++						LOG(HAL, Debug) << "Mapped Android format "
++								<< camera3Format.name << " to "
++								<< formats::MJPEG
++								<< " (direct support)";
++						formatMapped = true;
++						break;
++					}
++				}
++			}
++
++			/* If no direct MJPEG support, try conversion for JPEG-compatible formats */
++			if (!formatMapped) {
++				for (const auto &[inputFormat, outputFormats] : yuvConversions) {
++					for (const PixelFormat &outputFormat : outputFormats) {
++						/* Check if output format is supported by JPEG encoder */
++						if (outputFormat == formats::NV12 || outputFormat == formats::NV21 ||
++						    outputFormat == formats::RGB888 || outputFormat == formats::BGR888) {
++
++							/* Check if camera can produce the input format */
++							cfg.pixelFormat = inputFormat;
++							CameraConfiguration::Status status = cameraConfig->validate();
++
++							if (status != CameraConfiguration::Invalid && cfg.pixelFormat == inputFormat) {
++								mappedFormat = inputFormat;
++								formatMapped = true;
++								if (std::find(jpegDirectInputs.begin(), jpegDirectInputs.end(),
++									      inputFormat) != jpegDirectInputs.end()) {
++									/* Encoded straight from the source stream. */
++									formatsMap_[androidFormat] = formats::MJPEG;
++									LOG(HAL, Debug) << "BLOB format: encoding " << inputFormat
++											<< " directly";
++									break;
++								}
++								formatsMap_[androidFormat] = inputFormat;
++								conversionMap_[androidFormat] = std::make_pair(inputFormat, outputFormat);
++								LOG(HAL, Debug) << "BLOB format: Will convert " << inputFormat
++										<< " to " << outputFormat << " for JPEG encoding";
++								break;
++							}
++						}
++					}
++					if (formatMapped)
++						break;
++				}
++			}
++		} else {
++			/* For non-BLOB formats, use the existing logic */
+ 
+ 			/*
+-			 * The stream configuration size can be adjusted,
+-			 * not the pixel format.
+-			 *
+-			 * \todo This could be simplified once all pipeline
+-			 * handlers will report the StreamFormats list of
+-			 * supported formats.
++			 * Test the libcamera formats that can produce images
++			 * compatible with the format defined by Android.
+ 			 */
+-			cfg.pixelFormat = pixelFormat;
+-
+-			CameraConfiguration::Status status = cameraConfig->validate();
+-			if (status != CameraConfiguration::Invalid &&
+-			    cfg.pixelFormat == pixelFormat) {
+-				mappedFormat = pixelFormat;
+-				break;
++			for (const PixelFormat &pixelFormat : libcameraFormats) {
++				/*
++				 * The stream configuration size can be adjusted.
++				 * The pixel format might be converted via libyuv.
++				 * Conversion check is done in another loop after
++				 * testing native supported formats.
++				 *
++				 * \todo This could be simplified once all pipeline
++				 * handlers will report the StreamFormats list of
++				 * supported formats.
++				 */
++				cfg.pixelFormat = pixelFormat;
++
++				CameraConfiguration::Status status = cameraConfig->validate();
++				if (status != CameraConfiguration::Invalid &&
++				    cfg.pixelFormat == pixelFormat) {
++					mappedFormat = pixelFormat;
++					break;
++				}
+ 			}
+-		}
+-
+-		if (!mappedFormat.isValid()) {
+-			/* If the format is not mandatory, skip it. */
+-			if (!camera3Format.mandatory)
+-				continue;
+-
++
++			if (!mappedFormat.isValid()) {
++				/* If the format is not mandatory, skip it. */
++				if (!camera3Format.mandatory)
++					continue;
++			}
++
++			/*
++			 * Test if we can map the format via a software conversion.
++			 * This means that the converter can produce an "output" that is
++			 * compatible with the format defined in Android.
++			 */
++			if (!mappedFormat.isValid()) {
++				for (const PixelFormat &pixelFormat : libcameraFormats) {
++					LOG(HAL, Debug) << "Trying " << pixelFormat << " using conversion";
++
++					/* \todo move this into a separate function */
++					for (const auto &[inputFormat, outputFormats] : yuvConversions) {
++						/* check if the converter can produce pixelFormat */
++						auto it = std::find(outputFormats.begin(), outputFormats.end(), pixelFormat);
++						if (it == outputFormats.end())
++							continue;
++
++						/*
++						 * The converter can produce output pixelFormat, see if we can configure
++						 * the camera with the associated input pixelFormat.
++						 */
++						cfg.pixelFormat = inputFormat;
++						CameraConfiguration::Status status = cameraConfig->validate();
++
++						if (status != CameraConfiguration::Invalid && cfg.pixelFormat == inputFormat) {
++							mappedFormat = inputFormat;
++							conversionMap_[androidFormat] = std::make_pair(inputFormat, *it);
++							break;
++						}
++					}
++
++					/* We found a valid conversion format, so bail out */
++					if (mappedFormat.isValid())
++						break;
++				}
++			}
++		}
++
++		if (!formatMapped && !mappedFormat.isValid()) {
+ 			LOG(HAL, Error)
+ 				<< "Failed to map mandatory Android format "
+ 				<< camera3Format.name << " ("
+@@ -618,10 +725,12 @@
+ 		 * Record the mapping and then proceed to generate the
+ 		 * stream configurations map, by testing the image resolutions.
+ 		 */
+-		formatsMap_[androidFormat] = mappedFormat;
+-		LOG(HAL, Debug) << "Mapped Android format "
+-				<< camera3Format.name << " to "
+-				<< mappedFormat;
++		if (!formatMapped) {
++			formatsMap_[androidFormat] = mappedFormat;
++			LOG(HAL, Debug) << "Mapped Android format "
++					<< camera3Format.name << " to "
++					<< mappedFormat;
++		}
+ 
+ 		std::vector<Size> resolutions;
+ 		const PixelFormatInfo &info = PixelFormatInfo::info(mappedFormat);
+@@ -658,17 +767,19 @@
+ 			if (ret)
+ 				return ret;
+ 
++			int64_t minFrameDuration = 1e9 / 30.0;
++			int64_t maxFrameDuration = 1e9 / 1.0;
++
+ 			const ControlInfoMap &controls = camera_->controls();
+ 			const auto frameDurations = controls.find(
+ 				&controls::FrameDurationLimits);
+ 			if (frameDurations == controls.end()) {
+-				LOG(HAL, Error)
++				LOG(HAL, Warning)
+ 					<< "Camera does not report frame durations";
+-				return -EINVAL;
++			} else {
++				minFrameDuration = frameDurations->second.min().get<int64_t>() * 1000;
++				maxFrameDuration = frameDurations->second.max().get<int64_t>() * 1000;
+ 			}
+-
+-			int64_t minFrameDuration = frameDurations->second.min().get<int64_t>() * 1000;
+-			int64_t maxFrameDuration = frameDurations->second.max().get<int64_t>() * 1000;
+ 
+ 			/*
+ 			 * Cap min frame duration to 30 FPS with 1% tolerance.
+@@ -807,6 +918,7 @@
+ 		ANDROID_CONTROL_AWB_LOCK_AVAILABLE,
+ 		ANDROID_CONTROL_MAX_REGIONS,
+ 		ANDROID_CONTROL_SCENE_MODE_OVERRIDES,
++		ANDROID_DISTORTION_CORRECTION_AVAILABLE_MODES,
+ 		ANDROID_FLASH_INFO_AVAILABLE,
+ 		ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL,
+ 		ANDROID_JPEG_AVAILABLE_THUMBNAIL_SIZES,
+@@ -860,6 +972,7 @@
+ 		ANDROID_CONTROL_MODE,
+ 		ANDROID_CONTROL_SCENE_MODE,
+ 		ANDROID_CONTROL_VIDEO_STABILIZATION_MODE,
++		ANDROID_DISTORTION_CORRECTION_MODE,
+ 		ANDROID_FLASH_MODE,
+ 		ANDROID_JPEG_ORIENTATION,
+ 		ANDROID_JPEG_QUALITY,
+@@ -892,6 +1005,7 @@
+ 		ANDROID_CONTROL_MODE,
+ 		ANDROID_CONTROL_SCENE_MODE,
+ 		ANDROID_CONTROL_VIDEO_STABILIZATION_MODE,
++		ANDROID_DISTORTION_CORRECTION_MODE,
+ 		ANDROID_FLASH_MODE,
+ 		ANDROID_FLASH_STATE,
+ 		ANDROID_JPEG_GPS_COORDINATES,
+@@ -1064,14 +1178,27 @@
+ 	staticMetadata_->addEntry(ANDROID_JPEG_MAX_SIZE, maxJpegBufferSize_);
+ 
+ 	/* Sensor static metadata. */
+-	std::array<int32_t, 2> pixelArraySize;
+-	{
+-		const Rectangle &area = properties.get(properties::PixelArrayArea).value_or(utils::defopt);
+-		pixelArraySize[0] = area.width;
+-		pixelArraySize[1] = area.height;
+-		staticMetadata_->addEntry(ANDROID_SENSOR_INFO_PIXEL_ARRAY_SIZE,
+-					  pixelArraySize);
+-	}
++	const auto pixelArray = properties.get(properties::PixelArrayArea);
++	const auto activeAreas = properties.get(properties::PixelArrayActiveAreas);
++	if (!pixelArray || !pixelArray->width || !pixelArray->height ||
++	    !activeAreas || activeAreas->empty()) {
++		LOG(HAL, Error) << "Missing sensor pixel-array geometry";
++		return -EINVAL;
++	}
++
++	const Rectangle &activeArea = activeAreas->front();
++	if (!activeArea.width || !activeArea.height ||
++	    activeArea.enclosedIn(*pixelArray) != activeArea) {
++		LOG(HAL, Error) << "Active array lies outside the sensor pixel array";
++		return -EINVAL;
++	}
++
++	const std::array<int32_t, 2> pixelArraySize{
++		static_cast<int32_t>(pixelArray->width),
++		static_cast<int32_t>(pixelArray->height),
++	};
++	staticMetadata_->addEntry(ANDROID_SENSOR_INFO_PIXEL_ARRAY_SIZE,
++				  pixelArraySize);
+ 
+ 	const auto &cellSize = properties.get<Size>(properties::UnitCellSize);
+ 	if (cellSize) {
+@@ -1083,18 +1210,15 @@
+ 					  physicalSize);
+ 	}
+ 
+-	{
+-		const std::span<const Rectangle> rects =
+-			properties.get(properties::PixelArrayActiveAreas).value_or(utils::defopt);
+-		std::vector<int32_t> data{
+-			static_cast<int32_t>(rects[0].x),
+-			static_cast<int32_t>(rects[0].y),
+-			static_cast<int32_t>(rects[0].width),
+-			static_cast<int32_t>(rects[0].height),
+-		};
+-		staticMetadata_->addEntry(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE,
+-					  data);
+-	}
++	/* Android's native Rect encoding is left, top, width, height. */
++	const std::array<int32_t, 4> activeArray{
++		activeArea.x,
++		activeArea.y,
++		static_cast<int32_t>(activeArea.width),
++		static_cast<int32_t>(activeArea.height),
++	};
++	staticMetadata_->addEntry(ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE,
++				  activeArray);
+ 
+ 	int32_t sensitivityRange[] = {
+ 		32, 2400,
+@@ -1301,6 +1425,15 @@
+ 			data.push_back(ANDROID_NOISE_REDUCTION_MODE_OFF);
+ 		}
+ 		staticMetadata_->addEntry(ANDROID_NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES,
++					  data);
++	}
++
++	/* Distortion correction is not implemented. */
++	{
++		std::vector<uint8_t> data = {
++			ANDROID_DISTORTION_CORRECTION_MODE_OFF,
++		};
++		staticMetadata_->addEntry(ANDROID_DISTORTION_CORRECTION_AVAILABLE_MODES,
+ 					  data);
+ 	}
+ 
+@@ -1395,6 +1528,12 @@
+ 	 * smaller than 10^9 / minFps.
+ 	 */
+ 	int32_t minFps = std::ceil(1e9 / maxFrameDuration_);
++	minFps = std::max(minFps, minFrameRate_);
++	if (minFps > maxYUVFps) {
++		LOG(HAL, Error)
++			<< "Configured minimum frame rate exceeds the maximum YUV frame rate";
++		return -EINVAL;
++	}
+ 	int32_t availableAeFpsTarget[] = {
+ 		minFps, maxYUVFps, maxYUVFps, maxYUVFps,
+ 	};
+@@ -1490,6 +1629,34 @@
+ 		LOG(HAL, Error) << "Requested format " << utils::hex(format)
+ 				<< " not supported";
+ 		return PixelFormat();
++	}
++
++	return it->second;
++}
++
++/*
++ * Check if we need to do software conversion via a post-processor
++ * for an Android format code
++ */
++bool CameraCapabilities::needConversion(int format) const
++{
++	/* Not an error: most formats are produced without a conversion. */
++	auto it = conversionMap_.find(format);
++	if (it == conversionMap_.end())
++		return false;
++
++	return true;
++}
++
++/*
++ * Returns a conversion (input,output) pair for a given Android format code
++ */
++std::pair<PixelFormat, PixelFormat> CameraCapabilities::conversionFormats(int format) const
++{
++	auto it = conversionMap_.find(format);
++	if (it == conversionMap_.end()) {
++		LOG(HAL, Error) << "Requested format " << utils::hex(format)
++				<< " not supported for conversion";
+ 	}
+ 
+ 	return it->second;
+@@ -1595,6 +1762,10 @@
+ 	requestTemplate->addEntry(ANDROID_COLOR_CORRECTION_ABERRATION_MODE,
+ 				  aberrationMode);
+ 
++	uint8_t distortionCorrectionMode = ANDROID_DISTORTION_CORRECTION_MODE_OFF;
++	requestTemplate->addEntry(ANDROID_DISTORTION_CORRECTION_MODE,
++				  distortionCorrectionMode);
++
+ 	uint8_t controlMode = ANDROID_CONTROL_MODE_AUTO;
+ 	requestTemplate->addEntry(ANDROID_CONTROL_MODE, controlMode);
+ 
+diff --git a/src/android/camera_capabilities.h b/src/android/camera_capabilities.h
+--- a/src/android/camera_capabilities.h
++++ b/src/android/camera_capabilities.h
+@@ -26,10 +26,13 @@
+ 	CameraCapabilities() = default;
+ 
+ 	int initialize(std::shared_ptr<libcamera::Camera> camera,
+-		       int orientation, int facing);
++		       int orientation, int facing, int minFrameRate);
+ 
+ 	CameraMetadata *staticMetadata() const { return staticMetadata_.get(); }
+ 	libcamera::PixelFormat toPixelFormat(int format) const;
++	bool needConversion(int format) const;
++	std::pair<libcamera::PixelFormat, libcamera::PixelFormat>
++		conversionFormats(int format) const;
+ 	unsigned int maxJpegBufferSize() const { return maxJpegBufferSize_; }
+ 
+ 	std::unique_ptr<CameraMetadata> requestTemplateManual() const;
+@@ -70,6 +73,7 @@
+ 
+ 	int facing_;
+ 	int orientation_;
++	int minFrameRate_;
+ 	bool rawStreamAvailable_;
+ 	int64_t maxFrameDuration_;
+ 	camera_metadata_enum_android_info_supported_hardware_level hwLevel_;
+@@ -77,6 +81,7 @@
+ 
+ 	std::vector<Camera3StreamConfiguration> streamConfigurations_;
+ 	std::map<int, libcamera::PixelFormat> formatsMap_;
++	std::map<int, std::pair<libcamera::PixelFormat, libcamera::PixelFormat>> conversionMap_;
+ 	std::unique_ptr<CameraMetadata> staticMetadata_;
+ 	unsigned int maxJpegBufferSize_;
+ 
+diff --git a/src/android/camera_device.cpp b/src/android/camera_device.cpp
+--- a/src/android/camera_device.cpp
++++ b/src/android/camera_device.cpp
+@@ -6,6 +6,8 @@
+  */
+ 
+ #include "camera_device.h"
++
++#include <libcamera/orientation.h>
+ 
+ #include <algorithm>
+ #include <fstream>
+@@ -356,6 +358,9 @@
+ 	 * rotation property (anticlockwise) and compute the corresponding
+ 	 * value for clockwise direction as required by the Android orientation
+ 	 * metadata.
++	 *
++	 * A per-device HAL configuration may override the Android metadata
++	 * without changing the sensor's native buffer orientation.
+ 	 */
+ 	const auto &rotation = properties.get(properties::Rotation);
+ 	if (rotation) {
+@@ -363,8 +368,10 @@
+ 		if (cameraConfigData && cameraConfigData->rotation != -1 &&
+ 		    orientation_ != cameraConfigData->rotation) {
+ 			LOG(HAL, Warning)
+-				<< "Camera orientation does not match"
+-				<< " configuration file. Using " << orientation_;
++				<< "Using configured camera orientation "
++				<< cameraConfigData->rotation
++				<< " instead of sensor-derived " << orientation_;
++			orientation_ = cameraConfigData->rotation;
+ 		}
+ 	} else if (cameraConfigData) {
+ 		if (cameraConfigData->rotation == -1) {
+@@ -377,7 +384,8 @@
+ 		orientation_ = 0;
+ 	}
+ 
+-	return capabilities_.initialize(camera_, orientation_, facing_);
++	return capabilities_.initialize(camera_, orientation_, facing_,
++					cameraConfigData ? cameraConfigData->minFrameRate : 0);
+ }
+ 
+ /*
+@@ -617,6 +625,18 @@
+ 		stream->usage |= GRALLOC_USAGE_HW_CAMERA_WRITE;
+ 
+ 		/*
++		 * The HAL chooses the dataspace of IMPLEMENTATION_DEFINED
++		 * streams, and the consumers read it to convert the YUV data:
++		 * declare the range and matrix the YUV post-processor writes,
++		 * limited range BT.601 for video encoding, JFIF otherwise.
++		 */
++		if (stream->format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED)
++			stream->data_space =
++				(stream->usage & GRALLOC_USAGE_HW_VIDEO_ENCODER)
++					? HAL_DATASPACE_V0_BT601_625
++					: HAL_DATASPACE_V0_JFIF;
++
++		/*
+ 		 * If a CameraStream with the same size and format as the
+ 		 * current stream has already been requested, associate the two.
+ 		 */
+@@ -634,11 +654,48 @@
+ 			continue;
+ 		}
+ 
++		CameraStream::Type type = CameraStream::Type::Direct;
++		if (capabilities_.needConversion(stream->format))
++			type = CameraStream::Type::Internal;
++
+ 		Camera3StreamConfig streamConfig;
+-		streamConfig.streams = { { stream, CameraStream::Type::Direct } };
++		streamConfig.streams = { { stream, type } };
+ 		streamConfig.config.size = size;
+ 		streamConfig.config.pixelFormat = format;
+ 		streamConfigs.push_back(std::move(streamConfig));
++	}
++
++	/*
++	 * A camera that needs a conversion to produce YUV is a software ISP
++	 * with a single output: derive every other YUV stream from the
++	 * largest one, cropped and scaled by the YUV post-processor, instead
++	 * of asking the pipeline for streams it cannot produce.
++	 */
++	if (streamConfigs.size() > 1 &&
++	    capabilities_.needConversion(HAL_PIXEL_FORMAT_YCbCr_420_888)) {
++		auto largest = std::max_element(
++			streamConfigs.begin(), streamConfigs.end(),
++			[](const Camera3StreamConfig &a, const Camera3StreamConfig &b) {
++				return a.config.size.width * a.config.size.height <
++				       b.config.size.width * b.config.size.height;
++			});
++		Camera3StreamConfig source = std::move(*largest);
++		streamConfigs.erase(largest);
++
++		for (Camera3StreamConfig &other : streamConfigs) {
++			for (auto &stream : other.streams) {
++				source.streams[0].stream->usage |= GRALLOC_USAGE_SW_READ_OFTEN;
++				stream.stream->usage |= GRALLOC_USAGE_SW_WRITE_OFTEN;
++				source.streams.push_back({ stream.stream,
++							   CameraStream::Type::Mapped });
++				LOG(HAL, Info) << "Stream " << stream.stream->width
++					       << "x" << stream.stream->height
++					       << " derived from " << source.config.size;
++			}
++		}
++
++		streamConfigs.clear();
++		streamConfigs.push_back(std::move(source));
+ 	}
+ 
+ 	/* Now handle the MJPEG streams, adding a new stream if required. */
+@@ -672,6 +729,30 @@
+ 			camera3_stream_t *stream = streamConfig.streams[0].stream;
+ 			stream->usage |= GRALLOC_USAGE_SW_READ_OFTEN;
+ 			break;
++		}
++
++		/*
++		 * A software ISP has a single output (see above): a JPEG of
++		 * another size is encoded from the largest stream, cropped and
++		 * scaled by the JPEG post-processor, instead of asking the
++		 * pipeline for a second stream it would drop.
++		 */
++		if (index < 0 && !streamConfigs.empty() &&
++		    capabilities_.needConversion(HAL_PIXEL_FORMAT_YCbCr_420_888)) {
++			auto largest = std::max_element(
++				streamConfigs.begin(), streamConfigs.end(),
++				[](const Camera3StreamConfig &a, const Camera3StreamConfig &b) {
++					return a.config.size.width * a.config.size.height <
++					       b.config.size.width * b.config.size.height;
++				});
++			index = largest - streamConfigs.begin();
++			type = CameraStream::Type::Mapped;
++			largest->streams[0].stream->usage |= GRALLOC_USAGE_SW_READ_OFTEN;
++
++			LOG(HAL, Info)
++				<< "JPEG " << jpegStream->width << "x"
++				<< jpegStream->height << " derived from "
++				<< largest->config.size;
+ 		}
+ 
+ 		/*
+@@ -688,7 +769,15 @@
+ 			Camera3StreamConfig streamConfig;
+ 			streamConfig.config.size.width = jpegStream->width;
+ 			streamConfig.config.size.height = jpegStream->height;
++			/*
++			 * NV12 unless the camera needs a conversion to produce
++			 * YUV: then the source of that conversion, which the
++			 * JPEG encoder may read directly.
++			 */
+ 			streamConfig.config.pixelFormat = formats::NV12;
++			if (capabilities_.needConversion(HAL_PIXEL_FORMAT_YCbCr_420_888))
++				streamConfig.config.pixelFormat =
++					capabilities_.conversionFormats(HAL_PIXEL_FORMAT_YCbCr_420_888).first;
+ 			streamConfigs.push_back(std::move(streamConfig));
+ 
+ 			LOG(HAL, Info) << "Adding " << streamConfig.config.toString()
+@@ -723,23 +812,57 @@
+ 			 * be used when constructing the subsequent mapped
+ 			 * streams.
+ 			 */
+-			if (stream.type == CameraStream::Type::Direct)
++			if (stream.type == CameraStream::Type::Direct ||
++			    stream.type == CameraStream::Type::Internal)
+ 				sourceStream = &streams_.back();
+ 		}
+ 	}
+ 
++	/*
++	 * Android rotates the images itself, from android.sensor.orientation:
++	 * ask libcamera for the sensor's native orientation, i.e. no
++	 * transform. The default (upright) needs a rotation that a sensor
++	 * without flips cannot do, and validate() would report Adjusted.
++	 */
++	const auto &mountRotation = camera_->properties().get(properties::Rotation);
++	if (mountRotation) {
++		const auto native = orientationFromRotation(*mountRotation);
++		if (native)
++			config->orientation = *native;
++	}
++
++	const Orientation requestedOrientation = config->orientation;
+ 	switch (config->validate()) {
+ 	case CameraConfiguration::Valid:
+ 		break;
+ 	case CameraConfiguration::Adjusted:
+-		LOG(HAL, Info) << "Camera configuration adjusted";
++		/*
++		 * Allocation defaults are negotiated by the pipeline. Do not
++		 * accept changes to the requested streams or sensor orientation.
++		 */
++		if (config->orientation == requestedOrientation &&
++		    config->size() == streamConfigs.size() &&
++		    std::equal(config->begin(), config->end(), streamConfigs.begin(),
++			       [](const StreamConfiguration &actual,
++				  const Camera3StreamConfig &requested) {
++				       const StreamConfiguration &original = requested.config;
++				       return actual.size == original.size &&
++					      actual.pixelFormat == original.pixelFormat &&
++					      (!original.colorSpace ||
++					       actual.colorSpace == original.colorSpace) &&
++					      (!original.bufferCount ||
++					       actual.bufferCount == original.bufferCount);
++			       }))
++			break;
++
++		LOG(HAL, Error) << "Camera configuration changed requested streams";
+ 
+ 		for (const StreamConfiguration &cfg : *config)
+-			LOG(HAL, Info) << " - " << cfg.toString();
++			LOG(HAL, Error) << " - " << cfg.toString();
+ 
+ 		return -EINVAL;
+ 	case CameraConfiguration::Invalid:
+-		LOG(HAL, Info) << "Camera configuration invalid";
++		LOG(HAL, Error) << "Camera configuration invalid";
+ 		return -EINVAL;
+ 	}
+ 
+@@ -807,16 +930,31 @@
+ 	ControlList &controls = descriptor->request_->controls();
+ 	camera_metadata_ro_entry_t entry;
+ 	if (settings.getEntry(ANDROID_SCALER_CROP_REGION, &entry)) {
+-		const int32_t *data = entry.data.i32;
+-		Rectangle cropRegion{ data[0], data[1],
+-				      static_cast<unsigned int>(data[2]),
+-				      static_cast<unsigned int>(data[3]) };
+-		controls.set(controls::ScalerCrop, cropRegion);
++		/* Only set the control if the camera supports it */
++		auto iter = camera_->controls().find(controls::ScalerCrop.id());
++		if (iter != camera_->controls().end()) {
++			const int32_t *data = entry.data.i32;
++			Rectangle cropRegion{ data[0], data[1],
++					      static_cast<unsigned int>(data[2]),
++					      static_cast<unsigned int>(data[3]) };
++			controls.set(controls::ScalerCrop, cropRegion);
++		}
++	}
++
++	if (camera_->controls().find(controls::FrameDurationLimits.id()) != camera_->controls().end() &&
++	    settings.getEntry(ANDROID_CONTROL_AE_TARGET_FPS_RANGE, &entry) &&
++	    entry.count == 2 && entry.data.i32[0] > 0 && entry.data.i32[1] > 0) {
++		const int64_t limits[] = { 1000000 / entry.data.i32[1], 1000000 / entry.data.i32[0] };
++		controls.set(controls::FrameDurationLimits, std::span<const int64_t, 2>(limits));
+ 	}
+ 
+ 	if (settings.getEntry(ANDROID_STATISTICS_FACE_DETECT_MODE, &entry)) {
+-		const uint8_t *data = entry.data.u8;
+-		controls.set(controls::draft::FaceDetectMode, data[0]);
++		/* Only set the control if the camera supports it */
++		auto iter = camera_->controls().find(controls::draft::FaceDetectMode.id());
++		if (iter != camera_->controls().end()) {
++			const uint8_t *data = entry.data.u8;
++			controls.set(controls::draft::FaceDetectMode, data[0]);
++		}
+ 	}
+ 
+ 	if (settings.getEntry(ANDROID_SENSOR_TEST_PATTERN_MODE, &entry)) {
+@@ -1170,12 +1308,34 @@
+ 	 * If the Request has failed, abort the request by notifying the error
+ 	 * and complete the request with all buffers in error state.
+ 	 */
+-	if (request->status() != Request::RequestComplete) {
++	/*
++	 * A frame lost in capture (a DMA error on the receiver) completes the
++	 * request with its buffers cancelled and no timestamp. Handing it to
++	 * the framework as a result, with a zero shutter timestamp, leaves the
++	 * request in flight for ever and the next reconfiguration times out
++	 * waiting for it: report it as a failed request instead.
++	 */
++	bool frameLost = !request->metadata().get(controls::SensorTimestamp);
++	for (const auto &[stream, buffer] : request->buffers()) {
++		if (buffer->metadata().status != FrameMetadata::FrameSuccess)
++			frameLost = true;
++	}
++
++	if (request->status() != Request::RequestComplete || frameLost) {
+ 		LOG(HAL, Error) << "Request " << request->cookie()
+ 				<< " not successfully completed: "
+-				<< request->status();
++				<< request->status()
++				<< (frameLost ? " (frame lost)" : "");
+ 
+ 		abortRequest(descriptor);
++
++		/* Nothing will post-process them: give the internal buffers back. */
++		putInternalBuffers(descriptor);
++		{
++			MutexLocker locker(descriptor->streamsProcessMutex_);
++			descriptor->pendingStreamsToProcess_.clear();
++		}
++
+ 		completeDescriptor(descriptor);
+ 
+ 		return;
+@@ -1243,18 +1403,12 @@
+ 		if (ret) {
+ 			setBufferStatus(*buffer, Camera3RequestDescriptor::Status::Error);
+ 			descriptor->pendingStreamsToProcess_.erase(stream);
+-
+-			/*
+-			 * If the framebuffer is internal to CameraStream return
+-			 * it back now that we're done processing it.
+-			 */
+-			if (buffer->internalBuffer)
+-				stream->putBuffer(buffer->internalBuffer);
+ 		}
+ 	}
+ 
+ 	if (descriptor->pendingStreamsToProcess_.empty()) {
+ 		locker.unlock();
++		putInternalBuffers(descriptor);
+ 		completeDescriptor(descriptor);
+ 	}
+ }
+@@ -1347,6 +1501,23 @@
+ 		/* Also set error status on entire request descriptor. */
+ 		streamBuffer.request->status_ =
+ 			Camera3RequestDescriptor::Status::Error;
++	}
++}
++
++/*
++ * Give the internal buffers of a request back to their pools. An internal
++ * buffer is the source of every stream derived from it in the request, not
++ * only of the stream it was taken for: it goes back once they are all
++ * processed, not when the first is, or the camera could capture into it
++ * while another stream still reads it.
++ */
++void CameraDevice::putInternalBuffers(Camera3RequestDescriptor *descriptor)
++{
++	for (auto &buffer : descriptor->buffers_) {
++		if (buffer.internalBuffer) {
++			buffer.stream->putBuffer(buffer.internalBuffer);
++			buffer.internalBuffer = nullptr;
++		}
+ 	}
+ }
+ 
+@@ -1368,13 +1539,6 @@
+ {
+ 	setBufferStatus(*streamBuffer, status);
+ 
+-	/*
+-	 * If the framebuffer is internal to CameraStream return it back now
+-	 * that we're done processing it.
+-	 */
+-	if (streamBuffer->internalBuffer)
+-		streamBuffer->stream->putBuffer(streamBuffer->internalBuffer);
+-
+ 	Camera3RequestDescriptor *request = streamBuffer->request;
+ 
+ 	{
+@@ -1384,6 +1548,8 @@
+ 		if (!request->pendingStreamsToProcess_.empty())
+ 			return;
+ 	}
++
++	putInternalBuffers(request);
+ 
+ 	completeDescriptor(streamBuffer->request);
+ }
+@@ -1430,7 +1596,7 @@
+ 
+ 	/*
+ 	 * \todo Keep this in sync with the actual number of entries.
+-	 * Currently: 40 entries, 156 bytes
++	 * Currently: 41 entries, 157 bytes
+ 	 *
+ 	 * Reserve more space for the JPEG metadata set by the post-processor.
+ 	 * Currently:
+@@ -1563,6 +1729,9 @@
+ 	value = ANDROID_NOISE_REDUCTION_MODE_OFF;
+ 	resultMetadata->addEntry(ANDROID_NOISE_REDUCTION_MODE, value);
+ 
++	value = ANDROID_DISTORTION_CORRECTION_MODE_OFF;
++	resultMetadata->addEntry(ANDROID_DISTORTION_CORRECTION_MODE, value);
++
+ 	/* 33.3 msec */
+ 	const int64_t rolling_shutter_skew = 33300000;
+ 	resultMetadata->addEntry(ANDROID_SENSOR_ROLLING_SHUTTER_SKEW,
+diff --git a/src/android/camera_device.h b/src/android/camera_device.h
+--- a/src/android/camera_device.h
++++ b/src/android/camera_device.h
+@@ -94,6 +94,7 @@
+ 	void notifyError(uint32_t frameNumber, camera3_stream_t *stream,
+ 			 camera3_error_msg_code code) const;
+ 	int processControls(Camera3RequestDescriptor *descriptor);
++	void putInternalBuffers(Camera3RequestDescriptor *descriptor);
+ 	void completeDescriptor(Camera3RequestDescriptor *descriptor)
+ 		LIBCAMERA_TSA_EXCLUDES(descriptorsMutex_);
+ 	void sendCaptureResults() LIBCAMERA_TSA_REQUIRES(descriptorsMutex_);
+diff --git a/src/android/camera_hal_config.cpp b/src/android/camera_hal_config.cpp
+--- a/src/android/camera_hal_config.cpp
++++ b/src/android/camera_hal_config.cpp
+@@ -76,12 +76,12 @@
+ 	if (!root->contains("cameras"))
+ 		return -EINVAL;
+ 
+-	const ValueNode &camerasNode = (*root)["cameras"];
+-
+-	if (!camerasNode.isDictionary())
+-		return -EINVAL;
+-
+-	for (const auto &[cameraId, configData] : camerasNode.asDict()) {
++	const ValueNode &yamlObjectCameras = (*root)["cameras"];
++
++	if (!yamlObjectCameras.isDictionary())
++		return -EINVAL;
++
++	for (const auto &[cameraId, configData] : yamlObjectCameras.asDict()) {
+ 		if (parseCameraConfigData(cameraId, configData))
+ 			return -EINVAL;
+ 	}
+@@ -105,6 +105,16 @@
+ 	/* Parse property "rotation" */
+ 	if (parseRotation(cameraObject, cameraConfigData))
+ 		return -EINVAL;
++
++	if (cameraObject.contains("min-frame-rate")) {
++		int32_t minFrameRate = cameraObject["min-frame-rate"].get<int32_t>(0);
++		if (minFrameRate <= 0) {
++			LOG(HALConfig, Error)
++				<< "min-frame-rate must be a positive integer";
++			return -EINVAL;
++		}
++		cameraConfigData.minFrameRate = minFrameRate;
++	}
+ 
+ 	return 0;
+ }
+diff --git a/src/android/camera_hal_config.h b/src/android/camera_hal_config.h
+--- a/src/android/camera_hal_config.h
++++ b/src/android/camera_hal_config.h
+@@ -15,6 +15,7 @@
+ struct CameraConfigData {
+ 	int facing = -1;
+ 	int rotation = -1;
++	int minFrameRate = 0;
+ };
+ 
+ class CameraHalConfig final : public libcamera::Extensible
+diff --git a/src/android/camera_hal_manager.cpp b/src/android/camera_hal_manager.cpp
+--- a/src/android/camera_hal_manager.cpp
++++ b/src/android/camera_hal_manager.cpp
+@@ -125,7 +125,7 @@
+ 		 * Now check if this is an external camera and assign
+ 		 * its id accordingly.
+ 		 */
+-		if (cam->properties().get(properties::Location) == properties::LocationExternal) {
++		if (cameraLocation(cam.get()) == properties::LocationExternal) {
+ 			isCameraExternal = true;
+ 			id = nextExternalCameraId_;
+ 		} else {
+@@ -227,6 +227,11 @@
+ 	LOG(HAL, Debug) << "Camera ID: " << id << " removed successfully.";
+ }
+ 
++int32_t CameraHalManager::cameraLocation(const Camera *cam)
++{
++	return cam->properties().get(properties::Location).value_or(-1);
++}
++
+ CameraDevice *CameraHalManager::cameraDeviceFromHalId(unsigned int id)
+ {
+ 	auto iter = std::find_if(cameras_.begin(), cameras_.end(),
+diff --git a/src/android/camera_hal_manager.h b/src/android/camera_hal_manager.h
+--- a/src/android/camera_hal_manager.h
++++ b/src/android/camera_hal_manager.h
+@@ -48,6 +48,8 @@
+ 
+ 	CameraHalManager();
+ 
++	static int32_t cameraLocation(const libcamera::Camera *cam);
++
+ 	void cameraAdded(std::shared_ptr<libcamera::Camera> cam);
+ 	void cameraRemoved(std::shared_ptr<libcamera::Camera> cam);
+ 
+diff --git a/src/android/camera_stream.cpp b/src/android/camera_stream.cpp
+--- a/src/android/camera_stream.cpp
++++ b/src/android/camera_stream.cpp
+@@ -8,12 +8,14 @@
+ #include "camera_stream.h"
+ 
+ #include <errno.h>
+-#include <poll.h>
+ #include <string.h>
+ #include <sys/mman.h>
++#include <sys/poll.h>
+ #include <unistd.h>
+ 
+ #include <libcamera/formats.h>
++
++#include "libcamera/internal/formats.h"
+ 
+ #include "jpeg/post_processor_jpeg.h"
+ #include "yuv/post_processor_yuv.h"
+@@ -70,6 +72,7 @@
+ 	 */
+ 	allocatedBuffers_.clear();
+ 	allocator_.reset();
++	dmaAllocator_.reset();
+ }
+ 
+ const StreamConfiguration &CameraStream::configuration() const
+@@ -80,6 +83,21 @@
+ Stream *CameraStream::stream() const
+ {
+ 	return configuration().stream();
++}
++
++/*
++ * Unknown counts as full range: JFIF is the dataspace of camera YUV
++ * streams unless the client asks for another one.
++ */
++static bool isFullRange(android_dataspace_t dataSpace)
++{
++	switch (dataSpace) {
++	case HAL_DATASPACE_UNKNOWN:
++	case HAL_DATASPACE_JFIF:
++		return true;
++	default:
++		return (dataSpace & HAL_DATASPACE_RANGE_MASK) == HAL_DATASPACE_RANGE_FULL;
++	}
+ }
+ 
+ int CameraStream::configure()
+@@ -87,6 +105,7 @@
+ 	if (type_ == Type::Internal || type_ == Type::Mapped) {
+ 		const PixelFormat outFormat =
+ 			cameraDevice_->capabilities()->toPixelFormat(camera3Stream_->format);
++		StreamConfiguration input = configuration();
+ 		StreamConfiguration output = configuration();
+ 		output.pixelFormat = outFormat;
+ 		output.size.width = camera3Stream_->width;
+@@ -94,7 +113,10 @@
+ 
+ 		switch (outFormat) {
+ 		case formats::NV12:
+-			postProcessor_ = std::make_unique<PostProcessorYuv>();
++		case formats::YUYV:
++		case formats::XRGB8888:
++			postProcessor_ = std::make_unique<PostProcessorYuv>(
++				isFullRange(camera3Stream_->data_space));
+ 			break;
+ 
+ 		case formats::MJPEG:
+@@ -106,7 +128,17 @@
+ 			return -EINVAL;
+ 		}
+ 
+-		int ret = postProcessor_->configure(configuration(), output);
++		needConversion_ =
++			cameraDevice_->capabilities()->needConversion(camera3Stream_->format);
++
++		if (needConversion_) {
++			auto conv = cameraDevice_->capabilities()->conversionFormats(camera3Stream_->format);
++			LOG(HAL, Debug) << "Configuring the post processor to convert "
++					<< conv.first << " -> " << conv.second;
++			output.pixelFormat = conv.second;
++		}
++
++		int ret = postProcessor_->configure(input, output);
+ 		if (ret)
+ 			return ret;
+ 
+@@ -182,7 +214,23 @@
+ 		streamBuffer->fence.reset();
+ 	}
+ 
+-	const StreamConfiguration &output = configuration();
++	StreamConfiguration output = configuration();
++	if (needConversion_) {
++		output.pixelFormat =
++			cameraDevice_->capabilities()->conversionFormats(camera3Stream_->format).second;
++	}
++
++	/*
++	 * A BLOB buffer is sized for the largest JPEG, not for the source
++	 * frame: describe it as NV12, which fits, rather than as the RGB
++	 * source, which does not.
++	 */
++	if (camera3Stream_->format == HAL_PIXEL_FORMAT_BLOB)
++		output.pixelFormat = formats::NV12;
++
++	/* A derived stream may be smaller than its source (see CameraDevice). */
++	output.size = Size(camera3Stream_->width, camera3Stream_->height);
++
+ 	streamBuffer->dstBuffer = std::make_unique<CameraBuffer>(
+ 		*streamBuffer->camera3Buffer, output.pixelFormat, output.size,
+ 		PROT_READ | PROT_WRITE);
+@@ -202,6 +250,48 @@
+ 		return;
+ 
+ 	worker_->flush();
++}
++
++Size CameraStream::computeYUYVSize(const Size &nv12Size)
++{
++	/*
++	 * On am62x platforms, the receiver driver (j721e-csi2rx) only
++	 * supports packed YUV422 formats such as YUYV, YVYU, UYVY and VYUY.
++	 *
++	 * However, the gralloc implementation is only capable of semiplanar
++	 * YUV420 such as NV12.
++	 *
++	 * To trick the kernel into believing it's receiving a YUYV buffer, we adjust the
++	 * size we request to gralloc so that plane(0) of the NV12 buffer is long enough to
++	 * match the length of a YUYV plane.
++	 *
++	 * for NV12, one pixel is encoded on 1.5 bytes, but plane 0 has 1 byte per pixel.
++	 * for YUYV, one pixel is encoded on 2 bytes.
++	 *
++	 * So apply a *2 factor.
++	 *
++	 * See:
++	 * https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/pixfmt-packed-yuv.html
++	 * https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/pixfmt-yuv-planar.html
++	 */
++	unsigned int width = nv12Size.width;
++	unsigned int height = nv12Size.height;
++
++	/*
++	 * Plane 0 of the NV12 buffer must hold a whole frame of whatever
++	 * the pipeline writes into it: 2 bytes per pixel for YUYV, 4 for the
++	 * XRGB8888 output of the software ISP.
++	 */
++	const PixelFormat &format = configuration().pixelFormat;
++	if (format != formats::NV12) {
++		const PixelFormatInfo &info = PixelFormatInfo::info(format);
++		unsigned int factor = info.isValid() && info.pixelsPerGroup
++				    ? (info.planes[0].bytesPerGroup + info.pixelsPerGroup - 1) / info.pixelsPerGroup
++				    : 2;
++		width = width * factor;
++	}
++
++	return Size{ width, height };
+ }
+ 
+ FrameBuffer *CameraStream::getBuffer()
+@@ -221,9 +311,40 @@
+ 		 * \todo Store a reference to the format of the source stream
+ 		 * instead of hardcoding.
+ 		 */
+-		auto frameBuffer = allocator_->allocate(HAL_PIXEL_FORMAT_YCBCR_420_888,
+-							configuration().size,
+-							camera3Stream_->usage);
++		const StreamConfiguration &cfg = configuration();
++		std::unique_ptr<FrameBuffer> frameBuffer;
++
++		/*
++		 * The RGB output of the software ISP is written and read by the
++		 * CPU only, and a gralloc buffer is an uncached mapping, too
++		 * slow for the conversion to NV12. Take it from a cached dma-buf
++		 * heap instead, as a single plane.
++		 */
++		if (cfg.pixelFormat == formats::XRGB8888) {
++			if (!dmaAllocator_)
++				dmaAllocator_ = std::make_unique<DmaBufAllocator>(
++					DmaBufAllocator::DmaBufAllocatorFlag::SystemHeap |
++					DmaBufAllocator::DmaBufAllocatorFlag::UDmaBuf);
++			const size_t length = static_cast<size_t>(cfg.stride) * cfg.size.height;
++			UniqueFD fd;
++			if (dmaAllocator_->isValid())
++				fd = dmaAllocator_->alloc("libcamera-hal", length);
++			if (fd.isValid()) {
++				FrameBuffer::Plane plane;
++				plane.fd = SharedFD(std::move(fd));
++				plane.offset = 0;
++				plane.length = length;
++				frameBuffer = std::make_unique<HALFrameBuffer>(
++					std::vector<FrameBuffer::Plane>{ plane }, nullptr);
++			}
++		}
++
++		if (!frameBuffer) {
++			const Size hackedSize = computeYUYVSize(cfg.size);
++			frameBuffer = allocator_->allocate(HAL_PIXEL_FORMAT_YCBCR_420_888,
++							   hackedSize,
++							   camera3Stream_->usage);
++		}
+ 		allocatedBuffers_.push_back(std::move(frameBuffer));
+ 		buffers_.emplace_back(allocatedBuffers_.back().get());
+ 	}
+diff --git a/src/android/camera_stream.h b/src/android/camera_stream.h
+--- a/src/android/camera_stream.h
++++ b/src/android/camera_stream.h
+@@ -17,6 +17,8 @@
+ #include <libcamera/base/thread.h>
+ 
+ #include <libcamera/camera.h>
++
++#include "libcamera/internal/dma_buf_allocator.h"
+ #include <libcamera/framebuffer.h>
+ #include <libcamera/geometry.h>
+ #include <libcamera/pixel_format.h>
+@@ -128,9 +130,12 @@
+ 
+ 	int configure();
+ 	int process(Camera3RequestDescriptor::StreamBuffer *streamBuffer);
++	libcamera::Size computeYUYVSize(const libcamera::Size &nv12Size);
+ 	libcamera::FrameBuffer *getBuffer();
+ 	void putBuffer(libcamera::FrameBuffer *buffer);
+ 	void flush();
++
++	bool needConversion() const { return needConversion_; }
+ 
+ private:
+ 	class PostProcessorWorker : public libcamera::Thread
+@@ -174,6 +179,8 @@
+ 	const unsigned int index_;
+ 
+ 	std::unique_ptr<PlatformFrameBufferAllocator> allocator_;
++	/* CPU-only intermediate buffers (software ISP output), cached. */
++	std::unique_ptr<libcamera::DmaBufAllocator> dmaAllocator_;
+ 	std::vector<std::unique_ptr<libcamera::FrameBuffer>> allocatedBuffers_;
+ 	std::vector<libcamera::FrameBuffer *> buffers_ LIBCAMERA_TSA_GUARDED_BY(mutex_);
+ 	/*
+@@ -184,4 +191,6 @@
+ 	std::unique_ptr<PostProcessor> postProcessor_;
+ 
+ 	std::unique_ptr<PostProcessorWorker> worker_;
++
++	bool needConversion_;
+ };
+diff --git a/src/android/hal/device/LibcameraDeviceSession.cpp b/src/android/hal/device/LibcameraDeviceSession.cpp
+--- a/src/android/hal/device/LibcameraDeviceSession.cpp
++++ b/src/android/hal/device/LibcameraDeviceSession.cpp
+@@ -501,21 +501,17 @@
+ }
+ 
+ void LibcameraDeviceSession::ResultBatcher::freeReleaseFences(std::vector<CaptureResult>& results) {
++    /*
++     * The release fences are dups owned by the AIDL NativeHandles, which
++     * close them when the results are destroyed. makeFromAidl() does not
++     * dup: closing its handles here would close each fd twice, the second
++     * time whatever descriptor has reused the number in the meantime.
++     */
+     for (auto& result : results) {
+-        native_handle_t* handle = makeFromAidl(result.inputBuffer.releaseFence);
+-        if (handle != nullptr) {
+-            native_handle_close(handle);
+-            native_handle_delete(handle);
+-        }
+-        for (auto& buf : result.outputBuffers) {
+-            native_handle_t* resultFence = makeFromAidl(buf.releaseFence);
+-            if (resultFence != nullptr) {
+-                native_handle_close(handle);
+-                native_handle_delete(handle);
+-            }
+-        }
+-    }
+-    return;
++        result.inputBuffer.releaseFence = NativeHandle();
++        for (auto& buf : result.outputBuffers)
++            buf.releaseFence = NativeHandle();
++    }
+ }
+ 
+ void LibcameraDeviceSession::ResultBatcher::moveStreamBuffer(StreamBuffer&& src, StreamBuffer& dst) {
+@@ -1090,8 +1086,16 @@
+         out.resize(stream_list.num_streams);
+         for (size_t i = 0; i < stream_list.num_streams; i++) {
+             convertToAidl(static_cast<Camera3Stream*>(streams[i]), &out[i]);
++            // The HAL may override the dataspace, which out[i] reports.
++            // Keep the requested one: the next configuration repeats it
++            // for the streams it keeps.
++            streams[i]->data_space = mapToLegacyDataspace(
++                    static_cast<android_dataspace_t>(
++                            in_requestedConfiguration.streams[i].dataSpace));
+         }
+         mFirstRequest = true;
++        // Increment stream configuration counter for signalStreamFlush race condition handling
++        mStreamConfigCounter++;
+     }
+     return fromStatus(status);
+ }
+@@ -1445,6 +1449,7 @@
+             native_handle_t* handle = native_handle_create(/*numFds*/1, /*numInts*/0);
+             handle->data[0] = hal_result->input_buffer->release_fence;
+             result.inputBuffer.releaseFence = android::dupToAidl(handle);
++            native_handle_close(handle);
+             native_handle_delete(handle);
+         } else {
+             result.inputBuffer.releaseFence = NativeHandle();
+@@ -1472,6 +1477,8 @@
+             native_handle_t* handle = native_handle_create(/*numFds*/1, /*numInts*/0);
+             handle->data[0] = hal_result->output_buffers[i].release_fence;
+             result.outputBuffers[i].releaseFence = android::dupToAidl(handle);
++            /* The HAL handed the fence over: the AIDL handle holds a dup. */
++            native_handle_close(handle);
+             native_handle_delete(handle);
+         } else {
+             result.outputBuffers[i].releaseFence = NativeHandle();
+@@ -1638,14 +1645,142 @@
+ ScopedAStatus LibcameraDeviceSession::isReconfigurationRequired(
+         const CameraMetadata& in_oldSessionParams, const CameraMetadata& in_newSessionParams,
+         bool* _aidl_return) {
+-    ALOGI("%s()", __func__);
++    ALOGV("%s: Comparing session parameters", __FUNCTION__);
++
++    Status status = initStatus();
++    if (status != Status::OK) {
++        ALOGE("%s: camera init failed or disconnected", __FUNCTION__);
++        return fromStatus(status);
++    }
++
++    // Convert AIDL metadata to camera_metadata_t for comparison
++    const camera_metadata_t* oldParams = nullptr;
++    const camera_metadata_t* newParams = nullptr;
++
++    if (!convertFromAidl(in_oldSessionParams, &oldParams)) {
++        ALOGE("%s: Failed to convert old session parameters", __FUNCTION__);
++        return fromStatus(Status::INTERNAL_ERROR);
++    }
++
++    if (!convertFromAidl(in_newSessionParams, &newParams)) {
++        ALOGE("%s: Failed to convert new session parameters", __FUNCTION__);
++        return fromStatus(Status::INTERNAL_ERROR);
++    }
++
++    // Default to false - no reconfiguration needed
+     *_aidl_return = false;
+-    return fromStatus(Status::INTERNAL_ERROR);
++
++    // List of session parameters that would require stream reconfiguration
++    // if changed. For libcamera HAL, we are conservative and assume most
++    // parameters that could affect stream configuration would need reconfiguration.
++    static const uint32_t reconfigParams[] = {
++        // Frame rate changes might affect stream configuration
++        ANDROID_CONTROL_AE_TARGET_FPS_RANGE,
++        // Flash mode changes could require reconfiguration for torch mode
++        ANDROID_FLASH_MODE,
++        // Video stabilization might require different stream sizes
++        ANDROID_CONTROL_VIDEO_STABILIZATION_MODE,
++    };
++
++    // Compare each parameter that could require reconfiguration
++    for (const uint32_t tag : reconfigParams) {
++        camera_metadata_ro_entry_t oldEntry, newEntry;
++
++        int oldResult = find_camera_metadata_ro_entry(oldParams, tag, &oldEntry);
++        int newResult = find_camera_metadata_ro_entry(newParams, tag, &newEntry);
++
++        // If parameter presence changed
++        if ((oldResult == 0) != (newResult == 0)) {
++            ALOGD("%s: Parameter 0x%x presence changed, reconfiguration required",
++                  __FUNCTION__, tag);
++            *_aidl_return = true;
++            break;
++        }
++
++        // If both present, compare values
++        if (oldResult == 0 && newResult == 0) {
++            if (oldEntry.count != newEntry.count ||
++                memcmp(oldEntry.data.u8, newEntry.data.u8,
++                       oldEntry.count * camera_metadata_type_size[oldEntry.type]) != 0) {
++                ALOGD("%s: Parameter 0x%x value changed, reconfiguration required",
++                      __FUNCTION__, tag);
++                *_aidl_return = true;
++                break;
++            }
++        }
++    }
++
++    ALOGV("%s: Reconfiguration %s", __FUNCTION__,
++          *_aidl_return ? "required" : "not required");
++
++    return fromStatus(Status::OK);
+ }
+ ScopedAStatus LibcameraDeviceSession::signalStreamFlush(const std::vector<int32_t>& in_streamIds,
+                                                         int32_t in_streamConfigCounter) {
+-    ALOGI("%s()", __func__);
+-    return fromStatus(Status::INTERNAL_ERROR);
++    ALOGV("%s: streamIds size %zu, configCounter %d", __FUNCTION__,
++          in_streamIds.size(), in_streamConfigCounter);
++
++    Status status = initStatus();
++    if (status != Status::OK) {
++        ALOGE("%s: camera init failed or disconnected", __FUNCTION__);
++        return fromStatus(status);
++    }
++
++    // Check for race condition - if the counter is less than our last configureStreams,
++    // this call is stale and should be ignored
++    int32_t currentCounter = mStreamConfigCounter.load();
++    if (in_streamConfigCounter < currentCounter) {
++        ALOGD("%s: Stale signalStreamFlush call (counter %d < current %d), ignoring",
++              __FUNCTION__, in_streamConfigCounter, currentCounter);
++        return fromStatus(Status::OK);
++    }
++
++    // Validate stream IDs
++    for (int32_t streamId : in_streamIds) {
++        if (mStreamMap.find(streamId) == mStreamMap.end()) {
++            ALOGE("%s: Invalid stream ID %d", __FUNCTION__, streamId);
++            return fromStatus(Status::ILLEGAL_ARGUMENT);
++        }
++    }
++
++    ALOGD("%s: Flushing buffers for %zu streams before reconfiguration",
++          __FUNCTION__, in_streamIds.size());
++
++    // Check current inflight buffers for the specified streams
++    {
++        Mutex::Autolock _l(mInflightLock);
++
++        size_t totalInflightBuffers = 0;
++        for (int32_t streamId : in_streamIds) {
++            size_t streamInflightCount = 0;
++            for (const auto& pair : mInflightBuffers) {
++                if (pair.first.first == streamId) {
++                    streamInflightCount++;
++                }
++            }
++
++            if (streamInflightCount > 0) {
++                ALOGD("%s: Stream %d has %zu inflight buffers",
++                      __FUNCTION__, streamId, streamInflightCount);
++                totalInflightBuffers += streamInflightCount;
++            }
++        }
++
++        if (totalInflightBuffers > 0) {
++            ALOGW("%s: Total %zu inflight buffers detected for streams being flushed. "
++                  "HAL should return these buffers promptly to avoid fatal errors.",
++                  __FUNCTION__, totalInflightBuffers);
++        } else {
++            ALOGV("%s: No inflight buffers found for specified streams", __FUNCTION__);
++        }
++    }
++
++    // This is mainly a hint/notification from camera service
++    // The actual buffer return will happen through normal capture request completion
++    // or error callbacks. We just log the request and let the system know we received it.
++
++    ALOGV("%s: Stream flush signal processed successfully", __FUNCTION__);
++    return fromStatus(Status::OK);
+ }
+ ScopedAStatus LibcameraDeviceSession::switchToOffline(
+         const std::vector<int32_t>& in_streamsToKeep,
+@@ -1657,8 +1792,32 @@
+ }
+ ScopedAStatus LibcameraDeviceSession::repeatingRequestEnd(
+         int32_t in_frameNumber, const std::vector<int32_t>& in_streamIds) {
+-    ALOGI("%s()", __func__);
+-    return fromStatus(Status::INTERNAL_ERROR);
++    ALOGV("%s: frameNumber %d, streamIds size %zu", __FUNCTION__, in_frameNumber, in_streamIds.size());
++
++    Status status = initStatus();
++    if (status != Status::OK) {
++        ALOGE("%s: camera init failed or disconnected", __FUNCTION__);
++        return fromStatus(Status::OK);
++    }
++
++    // Validate stream IDs
++    for (int32_t streamId : in_streamIds) {
++        if (mStreamMap.find(streamId) == mStreamMap.end()) {
++            ALOGE("%s: Invalid stream ID %d", __FUNCTION__, streamId);
++            return fromStatus(Status::OK);
++        }
++    }
++
++    // Log the notification for debugging purposes
++    ALOGD("%s: Repeating request ending at frame %d for %zu streams",
++          __FUNCTION__, in_frameNumber, in_streamIds.size());
++
++    // This is a notification callback - no action required by HAL
++    // The framework is informing us that the repeating request will end
++    // at the specified frame number for the given streams.
++    // Since this is lightweight notification, we simply acknowledge it.
++
++    return fromStatus(Status::OK);
+ }
+ 
+ } // namespace implementation
+diff --git a/src/android/hal/device/LibcameraDeviceSession.h b/src/android/hal/device/LibcameraDeviceSession.h
+--- a/src/android/hal/device/LibcameraDeviceSession.h
++++ b/src/android/hal/device/LibcameraDeviceSession.h
+@@ -25,6 +25,7 @@
+ 
+ #include "convert.h"
+ 
++#include <atomic>
+ #include <deque>
+ #include <map>
+ #include <unordered_map>
+@@ -158,6 +159,9 @@
+     // Stream ID -> Camera3Stream cache
+     std::map<int, Camera3Stream> mStreamMap;
+ 
++    // Stream configuration counter to handle race conditions in signalStreamFlush
++    std::atomic<int32_t> mStreamConfigCounter{0};
++
+     mutable Mutex mInflightLock; // protecting mInflightBuffers and mCirculatingBuffers
+     // (streamID, frameNumber) -> inflight buffer cache
+     std::map<std::pair<int, uint32_t>, camera3_stream_buffer_t>  mInflightBuffers;
+diff --git a/src/android/hal/device/convert.cpp b/src/android/hal/device/convert.cpp
+--- a/src/android/hal/device/convert.cpp
++++ b/src/android/hal/device/convert.cpp
+@@ -20,6 +20,7 @@
+ #include "convert.h"
+ 
+ #include <aidl/android/hardware/graphics/common/BufferUsage.h>
++#include <aidl/android/hardware/graphics/common/Dataspace.h>
+ #include <aidl/android/hardware/graphics/common/PixelFormat.h>
+ #include <hardware/camera_common.h>
+ 
+@@ -108,6 +109,14 @@
+     dst->id = src->mId;
+     dst->overrideFormat = (PixelFormat) src->format;
+     dst->maxBuffers = src->max_buffers;
++    // For BLOB streams, ensure overrideDataSpace matches the forced JFIF dataspace
++    // For YUV 4:2:0 format, use JFIF dataspace to match framework expectation
++    if (src->format == HAL_PIXEL_FORMAT_BLOB || src->format == HAL_PIXEL_FORMAT_YCBCR_420_888) {
++        dst->overrideDataSpace = ::aidl::android::hardware::graphics::common::Dataspace::JFIF;
++    } else {
++        dst->overrideDataSpace = static_cast<::aidl::android::hardware::graphics::common::Dataspace>(src->data_space);
++    }
++
+     if (src->stream_type == CAMERA3_STREAM_OUTPUT) {
+         dst->consumerUsage = (BufferUsage)0;
+         dst->producerUsage = (BufferUsage)src->usage;
+diff --git a/src/android/hal/provider/service.cpp b/src/android/hal/provider/service.cpp
+--- a/src/android/hal/provider/service.cpp
++++ b/src/android/hal/provider/service.cpp
+@@ -17,6 +17,9 @@
+ #include <android/binder_manager.h>
+ #include <android/binder_process.h>
+ 
++#include <stdlib.h>
++#include <sys/system_properties.h>
++
+ #include "LibcameraProvider.h"
+ 
+ using ::android::hardware::camera::provider::implementation::LibcameraProvider;
+@@ -30,9 +33,28 @@
+ {
+     ALOGI("LibcameraProvider libcamera service is starting.");
+ 
++    /*
++     * Debug knob: vendor.camera.libcamera.log_levels overrides the
++     * LIBCAMERA_LOG_LEVELS of the .rc (e.g. "*:WARN,HAL:DEBUG": the last
++     * match wins). libcamera reads it at its first log message.
++     */
++    char levels[PROP_VALUE_MAX] = {};
++    if (__system_property_get("vendor.camera.libcamera.log_levels", levels) > 0)
++        setenv("LIBCAMERA_LOG_LEVELS", levels, 1);
++
++    /* Debug knob: number of debayering threads of the software ISP. */
++    char threads[PROP_VALUE_MAX] = {};
++    if (__system_property_get("vendor.camera.libcamera.softisp_threads", threads) > 0)
++        setenv("LIBCAMERA_SOFTISP_THREADS", threads, 1);
++
+     ABinderProcess_setThreadPoolMaxThreadCount(HWBINDER_THREAD_COUNT);
+ 
+     std::shared_ptr<LibcameraProvider> provider = ndk::SharedRefBase::make<LibcameraProvider>();
++    if (provider->isInitFailed()) {
++        ALOGE("Could not initialize libcamera camera provider.");
++        return EXIT_FAILURE;
++    }
++
+     const std::string serviceName = std::string(LibcameraProvider::descriptor) + "/libcamera/0";
+ 
+     binder_exception_t ret =
+diff --git a/src/android/jpeg/encoder_libjpeg.cpp b/src/android/jpeg/encoder_libjpeg.cpp
+--- a/src/android/jpeg/encoder_libjpeg.cpp
++++ b/src/android/jpeg/encoder_libjpeg.cpp
+@@ -43,6 +43,7 @@
+ 
+ 	{ formats::RGB888, { JCS_EXT_BGR, PixelFormatInfo::info(formats::RGB888), false } },
+ 	{ formats::BGR888, { JCS_EXT_RGB, PixelFormatInfo::info(formats::BGR888), false } },
++	{ formats::XRGB8888, { JCS_EXT_BGRX, PixelFormatInfo::info(formats::XRGB8888), false } },
+ 
+ 	{ formats::NV12, { JCS_YCbCr, PixelFormatInfo::info(formats::NV12), false } },
+ 	{ formats::NV21, { JCS_YCbCr, PixelFormatInfo::info(formats::NV21), true } },
+@@ -93,7 +94,12 @@
+ 	compress_.image_height = cfg.size.height;
+ 	compress_.in_color_space = info.colorSpace;
+ 
+-	compress_.input_components = info.colorSpace == JCS_GRAYSCALE ? 1 : 3;
++	if (info.colorSpace == JCS_GRAYSCALE)
++		compress_.input_components = 1;
++	else if (info.colorSpace == JCS_EXT_BGRX)
++		compress_.input_components = 4;
++	else
++		compress_.input_components = 3;
+ 
+ 	jpeg_set_defaults(&compress_);
+ 
+diff --git a/src/android/jpeg/exif.h b/src/android/jpeg/exif.h
+--- a/src/android/jpeg/exif.h
++++ b/src/android/jpeg/exif.h
+@@ -8,12 +8,13 @@
+ #pragma once
+ 
+ #include <chrono>
+-#include <span>
+ #include <string>
+ #include <time.h>
+ #include <vector>
+ 
+ #include <libexif/exif-data.h>
++
++#include <span>
+ 
+ #include <libcamera/geometry.h>
+ 
+diff --git a/src/android/jpeg/post_processor_jpeg.cpp b/src/android/jpeg/post_processor_jpeg.cpp
+--- a/src/android/jpeg/post_processor_jpeg.cpp
++++ b/src/android/jpeg/post_processor_jpeg.cpp
+@@ -23,6 +23,10 @@
+ 
+ #include <libcamera/formats.h>
+ 
++#include <libyuv/scale_argb.h>
++
++#include "libcamera/internal/mapped_framebuffer.h"
++
+ using namespace libcamera;
+ using namespace std::chrono_literals;
+ 
+@@ -36,10 +40,17 @@
+ int PostProcessorJpeg::configure(const StreamConfiguration &inCfg,
+ 				 const StreamConfiguration &outCfg)
+ {
+-	if (inCfg.size != outCfg.size) {
++	/*
++	 * An XRGB source (software ISP) of another size is cropped to the
++	 * JPEG aspect ratio and scaled, then encoded from a temporary buffer.
++	 */
++	scale_ = inCfg.size != outCfg.size;
++	if (scale_ && inCfg.pixelFormat != formats::XRGB8888) {
+ 		LOG(JPEG, Error) << "Mismatch of input and output stream sizes";
+ 		return -EINVAL;
+ 	}
++	sourceSize_ = inCfg.size;
++	sourceStride_ = inCfg.stride ? inCfg.stride : inCfg.size.width * 4;
+ 
+ 	if (outCfg.pixelFormat != formats::MJPEG) {
+ 		LOG(JPEG, Error) << "Output stream pixel format is not JPEG";
+@@ -56,7 +67,19 @@
+ 	encoder_ = std::make_unique<EncoderLibJpeg>();
+ #endif
+ 
+-	return encoder_->configure(inCfg);
++	if (!scale_)
++		return encoder_->configure(inCfg);
++
++#if defined(OS_CHROMEOS)
++	LOG(JPEG, Error) << "Scaling is not supported by the JEA encoder";
++	return -EINVAL;
++#else
++	StreamConfiguration encCfg = inCfg;
++	encCfg.size = outCfg.size;
++	encCfg.stride = outCfg.size.width * 4;
++	scaled_.resize(static_cast<size_t>(encCfg.stride) * outCfg.size.height);
++	return encoder_->configure(encCfg);
++#endif
+ }
+ 
+ void PostProcessorJpeg::generateThumbnail(const FrameBuffer &source,
+@@ -106,6 +129,46 @@
+ 	}
+ }
+ 
++#if !defined(OS_CHROMEOS)
++int PostProcessorJpeg::encodeScaled(Camera3RequestDescriptor::StreamBuffer *streamBuffer,
++				    std::span<const uint8_t> exifData, unsigned int quality)
++{
++	MappedFrameBuffer frame(streamBuffer->srcBuffer,
++				MappedFrameBuffer::MapFlag::Read);
++	if (!frame.isValid()) {
++		LOG(JPEG, Error) << "Failed to map FrameBuffer : "
++				 << strerror(frame.error());
++		return frame.error();
++	}
++
++	const unsigned int sw = sourceSize_.width;
++	const unsigned int sh = sourceSize_.height;
++	const unsigned int dw = streamSize_.width;
++	const unsigned int dh = streamSize_.height;
++
++	/* Crop the centre to the JPEG aspect ratio. */
++	unsigned int cw = sw, ch = sh;
++	if (static_cast<uint64_t>(sw) * dh > static_cast<uint64_t>(sh) * dw)
++		cw = (sh * dw / dh) & ~1u;
++	else
++		ch = (sw * dh / dw) & ~1u;
++
++	const uint8_t *crop = frame.planes()[0].data() +
++			      ((sh - ch) / 2) * sourceStride_ + ((sw - cw) / 2) * 4;
++	int ret = libyuv::ARGBScale(crop, sourceStride_, cw, ch,
++				    scaled_.data(), dw * 4, dw, dh,
++				    libyuv::FilterMode::kFilterBilinear);
++	if (ret) {
++		LOG(JPEG, Error) << "Failed to scale the JPEG source: " << ret;
++		return -EINVAL;
++	}
++
++	std::vector<std::span<uint8_t>> planes{ { scaled_.data(), scaled_.size() } };
++	return static_cast<EncoderLibJpeg *>(encoder_.get())
++		->encode(planes, streamBuffer->dstBuffer->plane(0), exifData, quality);
++}
++#endif
++
+ void PostProcessorJpeg::process(Camera3RequestDescriptor::StreamBuffer *streamBuffer)
+ {
+ 	ASSERT(encoder_);
+@@ -202,7 +265,13 @@
+ 	const uint8_t quality = ret ? *entry.data.u8 : 95;
+ 	resultMetadata->addEntry(ANDROID_JPEG_QUALITY, quality);
+ 
+-	int jpeg_size = encoder_->encode(streamBuffer, exif.data(), quality);
++	int jpeg_size;
++#if !defined(OS_CHROMEOS)
++	if (scale_) {
++		jpeg_size = encodeScaled(streamBuffer, exif.data(), quality);
++	} else
++#endif
++		jpeg_size = encoder_->encode(streamBuffer, exif.data(), quality);
+ 	if (jpeg_size < 0) {
+ 		LOG(JPEG, Error) << "Failed to encode stream image";
+ 		processComplete.emit(streamBuffer, PostProcessor::Status::Error);
+diff --git a/src/android/jpeg/post_processor_jpeg.h b/src/android/jpeg/post_processor_jpeg.h
+--- a/src/android/jpeg/post_processor_jpeg.h
++++ b/src/android/jpeg/post_processor_jpeg.h
+@@ -10,6 +10,8 @@
+ #include "../post_processor.h"
+ #include "encoder_libjpeg.h"
+ #include "thumbnailer.h"
++
++#include <vector>
+ 
+ #include <libcamera/geometry.h>
+ 
+@@ -25,6 +27,9 @@
+ 	void process(Camera3RequestDescriptor::StreamBuffer *streamBuffer) override;
+ 
+ private:
++	int encodeScaled(Camera3RequestDescriptor::StreamBuffer *streamBuffer,
++			 std::span<const uint8_t> exifData,
++			 unsigned int quality);
+ 	void generateThumbnail(const libcamera::FrameBuffer &source,
+ 			       const libcamera::Size &targetSize,
+ 			       unsigned int quality,
+@@ -33,6 +38,11 @@
+ 	CameraDevice *const cameraDevice_;
+ 	std::unique_ptr<Encoder> encoder_;
+ 	libcamera::Size streamSize_;
++	/* An XRGB source of another size, cropped and scaled before encoding */
++	bool scale_ = false;
++	libcamera::Size sourceSize_;
++	unsigned int sourceStride_ = 0;
++	std::vector<uint8_t> scaled_;
+ 	EncoderLibJpeg thumbnailEncoder_;
+ 	Thumbnailer thumbnailer_;
+ };
+diff --git a/src/android/jpeg/thumbnailer.cpp b/src/android/jpeg/thumbnailer.cpp
+--- a/src/android/jpeg/thumbnailer.cpp
++++ b/src/android/jpeg/thumbnailer.cpp
+@@ -13,6 +13,10 @@
+ 
+ #include "libcamera/internal/mapped_framebuffer.h"
+ 
++#include <libyuv/convert_from_argb.h>
++#include <libyuv/planar_functions.h>
++#include <libyuv/scale_argb.h>
++
+ using namespace libcamera;
+ 
+ LOG_DEFINE_CATEGORY(Thumbnailer)
+@@ -26,6 +30,11 @@
+ {
+ 	sourceSize_ = sourceSize;
+ 	pixelFormat_ = pixelFormat;
++	sourceFormat_ = pixelFormat;
++
++	/* An RGB source (software ISP) is scaled and converted to NV12. */
++	if (pixelFormat_ == formats::XRGB8888)
++		pixelFormat_ = formats::NV12;
+ 
+ 	if (pixelFormat_ != formats::NV12) {
+ 		LOG(Thumbnailer, Error)
+@@ -58,6 +67,27 @@
+ 	const unsigned int sh = sourceSize_.height;
+ 	const unsigned int tw = targetSize.width;
+ 	const unsigned int th = targetSize.height;
++
++	if (sourceFormat_ == formats::XRGB8888) {
++		std::vector<unsigned char> scaled(tw * th * 4);
++
++		destination->resize(tw * th + (th / 2) * tw);
++		libyuv::ARGBScale(frame.planes()[0].data(), sw * 4, sw, sh,
++				  scaled.data(), tw * 4, tw, th,
++				  libyuv::kFilterBilinear);
++		/* Full range, as libjpeg encodes it (JFIF) */
++		const unsigned int cw = (tw + 1) / 2;
++		const unsigned int ch = (th + 1) / 2;
++		std::vector<unsigned char> chroma(cw * ch * 2);
++		libyuv::ARGBToJ420(scaled.data(), tw * 4,
++				   destination->data(), tw,
++				   chroma.data(), cw,
++				   chroma.data() + cw * ch, cw, tw, th);
++		libyuv::MergeUVPlane(chroma.data(), cw,
++				     chroma.data() + cw * ch, cw,
++				     destination->data() + tw * th, tw, cw, ch);
++		return;
++	}
+ 
+ 	ASSERT(frame.planes().size() == 2);
+ 	ASSERT(tw % 2 == 0 && th % 2 == 0);
+diff --git a/src/android/jpeg/thumbnailer.h b/src/android/jpeg/thumbnailer.h
+--- a/src/android/jpeg/thumbnailer.h
++++ b/src/android/jpeg/thumbnailer.h
+@@ -26,6 +26,7 @@
+ 
+ private:
+ 	libcamera::PixelFormat pixelFormat_;
++	libcamera::PixelFormat sourceFormat_;
+ 	libcamera::Size sourceSize_;
+ 
+ 	bool valid_;
+diff --git a/src/android/mm/generic_camera_buffer.cpp b/src/android/mm/generic_camera_buffer.cpp
+--- a/src/android/mm/generic_camera_buffer.cpp
++++ b/src/android/mm/generic_camera_buffer.cpp
+@@ -10,6 +10,8 @@
+ #include <sys/mman.h>
+ #include <unistd.h>
+ 
++#include <ui/GraphicBufferMapper.h>
++
+ #include <libcamera/base/log.h>
+ 
+ #include "libcamera/internal/formats.h"
+@@ -48,6 +50,7 @@
+ 
+ 	void map();
+ 
++	buffer_handle_t handle_;
+ 	int fd_;
+ 	int flags_;
+ 	off_t bufferLength_;
+@@ -59,7 +62,8 @@
+ 			       buffer_handle_t camera3Buffer,
+ 			       PixelFormat pixelFormat,
+ 			       const Size &size, int flags)
+-	: fd_(-1), flags_(flags), bufferLength_(-1), mapped_(false)
++	: handle_(camera3Buffer), fd_(-1), flags_(flags), bufferLength_(-1),
++	  mapped_(false)
+ {
+ 	error_ = 0;
+ 
+@@ -70,23 +74,7 @@
+ 		return;
+ 	}
+ 
+-	/*
+-	 * As Android doesn't offer an API to query buffer layouts, assume for
+-	 * now that the buffer is backed by a single dmabuf, with planes being
+-	 * stored contiguously.
+-	 */
+-	for (int i = 0; i < camera3Buffer->numFds; i++) {
+-		if (camera3Buffer->data[i] == -1 || camera3Buffer->data[i] == fd_)
+-			continue;
+-
+-		if (fd_ != -1) {
+-			error_ = -EINVAL;
+-			LOG(HAL, Error) << "Discontiguous planes are not supported";
+-			return;
+-		}
+-
+-		fd_ = camera3Buffer->data[i];
+-	}
++	fd_ = camera3Buffer->data[0];
+ 
+ 	if (fd_ == -1) {
+ 		error_ = -EINVAL;
+@@ -103,6 +91,33 @@
+ 
+ 	const unsigned int numPlanes = info.numPlanes();
+ 	planeInfo_.resize(numPlanes);
++
++	/*
++	 * Take the plane geometry from the allocator when it reports it: rows
++	 * may be padded beyond the width, and planes placed past the end of
++	 * the previous one.
++	 */
++	std::vector<android::ui::PlaneLayout> layouts;
++	if (android::GraphicBufferMapper::get().getPlaneLayouts(handle_, &layouts) == android::OK &&
++	    layouts.size() == numPlanes) {
++		bool valid = true;
++		for (unsigned int i = 0; i < numPlanes; ++i) {
++			const auto &layout = layouts[i];
++			if (layout.offsetInBytes < 0 || layout.strideInBytes <= 0 ||
++			    layout.totalSizeInBytes <= 0 ||
++			    layout.offsetInBytes + layout.totalSizeInBytes > bufferLength_) {
++				valid = false;
++				break;
++			}
++
++			planeInfo_[i].stride = layout.strideInBytes;
++			planeInfo_[i].offset = layout.offsetInBytes;
++			planeInfo_[i].size = layout.totalSizeInBytes;
++		}
++
++		if (valid)
++			return;
++	}
+ 
+ 	unsigned int offset = 0;
+ 	for (unsigned int i = 0; i < numPlanes; ++i) {
+@@ -171,6 +186,18 @@
+ {
+ 	ASSERT(bufferLength_ >= 0);
+ 
++	/*
++	 * The framework looks for the JPEG blob header at the end of the
++	 * buffer's logical size, the gralloc width of a BLOB buffer, which it
++	 * scales down for JPEGs smaller than the maximum. The dma-buf behind
++	 * it may be larger (gbm_mesa rounds a BLOB up to 4096-byte rows), so
++	 * its length from lseek() puts the header where nobody reads it.
++	 */
++	uint64_t width = 0;
++	if (android::GraphicBufferMapper::get().getWidth(handle_, &width) == android::OK &&
++	    width > 0 && width <= static_cast<uint64_t>(bufferLength_))
++		return std::min<size_t>(width, maxJpegBufferSize);
++
+ 	return std::min<unsigned int>(bufferLength_, maxJpegBufferSize);
+ }
+ 
+diff --git a/src/android/yuv/post_processor_yuv.cpp b/src/android/yuv/post_processor_yuv.cpp
+--- a/src/android/yuv/post_processor_yuv.cpp
++++ b/src/android/yuv/post_processor_yuv.cpp
+@@ -7,7 +7,14 @@
+ 
+ #include "post_processor_yuv.h"
+ 
++#include <algorithm>
++#include <utility>
++
++#include <libyuv/convert.h>
++#include <libyuv/convert_from_argb.h>
++#include <libyuv/planar_functions.h>
+ #include <libyuv/scale.h>
++#include <libyuv/scale_argb.h>
+ 
+ #include <libcamera/base/log.h>
+ 
+@@ -22,14 +29,44 @@
+ 
+ LOG_DEFINE_CATEGORY(YUV)
+ 
++namespace {
++
++/**
++ * \var supportedConversions
++ * \brief list of supported output pixel formats for an input pixel format
++ */
++const std::map<PixelFormat, const std::vector<PixelFormat>> supportedConversions = {
++	{ formats::YUYV, { formats::NV12 } },
++	/* The output of the software ISP (debayer_cpu) */
++	{ formats::XRGB8888, { formats::NV12 } },
++};
++
++} /* namespace */
++
+ int PostProcessorYuv::configure(const StreamConfiguration &inCfg,
+ 				const StreamConfiguration &outCfg)
+ {
+ 	if (inCfg.pixelFormat != outCfg.pixelFormat) {
+-		LOG(YUV, Error) << "Pixel format conversion is not supported"
+-				<< " (from " << inCfg.pixelFormat
+-				<< " to " << outCfg.pixelFormat << ")";
+-		return -EINVAL;
++		const auto it = supportedConversions.find(inCfg.pixelFormat);
++		if (it == supportedConversions.end()) {
++			LOG(YUV, Error) << "Unsupported source format " << inCfg.pixelFormat;
++			return -EINVAL;
++		}
++
++		std::vector<PixelFormat> outFormats = it->second;
++		const auto &match = std::find(outFormats.begin(), outFormats.end(), outCfg.pixelFormat);
++		if (match == outFormats.end()) {
++			LOG(YUV, Error) << "Requested pixel format conversion is not supported"
++					<< " (from " << inCfg.pixelFormat
++					<< " to " << outCfg.pixelFormat << ")";
++			return -EINVAL;
++		}
++	} else {
++		if (inCfg.pixelFormat != formats::NV12) {
++			LOG(YUV, Error) << "Unsupported format " << inCfg.pixelFormat
++					<< " (only NV12 is supported for scaling)";
++			return -EINVAL;
++		}
+ 	}
+ 
+ 	if (inCfg.size < outCfg.size) {
+@@ -39,12 +76,6 @@
+ 		return -EINVAL;
+ 	}
+ 
+-	if (inCfg.pixelFormat != formats::NV12) {
+-		LOG(YUV, Error) << "Unsupported format " << inCfg.pixelFormat
+-				<< " (only NV12 is supported)";
+-		return -EINVAL;
+-	}
+-
+ 	calculateLengths(inCfg, outCfg);
+ 	return 0;
+ }
+@@ -66,62 +97,178 @@
+ 		return;
+ 	}
+ 
+-	int ret = libyuv::NV12Scale(sourceMapped.planes()[0].data(),
+-				    sourceStride_[0],
+-				    sourceMapped.planes()[1].data(),
+-				    sourceStride_[1],
+-				    sourceSize_.width, sourceSize_.height,
+-				    destination->plane(0).data(),
+-				    destinationStride_[0],
+-				    destination->plane(1).data(),
+-				    destinationStride_[1],
+-				    destinationSize_.width,
+-				    destinationSize_.height,
+-				    libyuv::FilterMode::kFilterBilinear);
++	int ret = 0;
++	switch (sourceFormat_) {
++	case formats::NV12:
++		ret = libyuv::NV12Scale(sourceMapped.planes()[0].data(),
++					sourceStride_[0],
++					sourceMapped.planes()[1].data(),
++					sourceStride_[1],
++					sourceSize_.width, sourceSize_.height,
++					destination->plane(0).data(),
++					destination->stride(0),
++					destination->plane(1).data(),
++					destination->stride(1),
++					destinationSize_.width,
++					destinationSize_.height,
++					libyuv::FilterMode::kFilterBilinear);
++		break;
++	case formats::YUYV:
++		ret = libyuv::YUY2ToNV12(sourceMapped.planes()[0].data(),
++					 sourceStride_[0],
++					 destination->plane(0).data(),
++					 destination->stride(0),
++					 destination->plane(1).data(),
++					 destination->stride(1),
++					 destinationSize_.width,
++					 destinationSize_.height);
++		break;
++	case formats::XRGB8888: {
++		/* libcamera XRGB8888 is B, G, R, X in memory: libyuv "ARGB". */
++		const uint8_t *src = sourceMapped.planes()[0].data();
++		unsigned int srcStride = sourceStride_[0];
++		const unsigned int sw = sourceSize_.width;
++		const unsigned int sh = sourceSize_.height;
++		const unsigned int dw = destinationSize_.width;
++		const unsigned int dh = destinationSize_.height;
++
++		if (sw != dw || sh != dh) {
++			/*
++			 * A stream derived from a larger one: crop the centre to
++			 * the destination aspect ratio, then scale.
++			 */
++			unsigned int cw = sw, ch = sh;
++			if (static_cast<uint64_t>(sw) * dh > static_cast<uint64_t>(sh) * dw)
++				cw = (sh * dw / dh) & ~1u;
++			else
++				ch = (sw * dh / dw) & ~1u;
++
++			const uint8_t *crop = src + ((sh - ch) / 2) * srcStride +
++					      ((sw - cw) / 2) * 4;
++
++			/* Scaling up: convert first, then scale the smaller NV12. */
++			if (static_cast<uint64_t>(cw) * ch < static_cast<uint64_t>(dw) * dh) {
++				const size_t lumaSize = static_cast<size_t>(cw) * ch;
++				scaled_.resize(lumaSize * 3 / 2);
++				ret = argbToNV12(crop, srcStride,
++						 scaled_.data(), cw,
++						 scaled_.data() + lumaSize, cw,
++						 cw, ch);
++				if (ret)
++					break;
++				ret = libyuv::NV12Scale(scaled_.data(), cw,
++							scaled_.data() + lumaSize, cw,
++							cw, ch,
++							destination->plane(0).data(),
++							destination->stride(0),
++							destination->plane(1).data(),
++							destination->stride(1),
++							dw, dh,
++							libyuv::FilterMode::kFilterBilinear);
++				break;
++			}
++
++			scaled_.resize(static_cast<size_t>(dw) * dh * 4);
++			ret = libyuv::ARGBScale(crop, srcStride, cw, ch,
++						scaled_.data(), dw * 4, dw, dh,
++						libyuv::FilterMode::kFilterBilinear);
++			if (ret)
++				break;
++			src = scaled_.data();
++			srcStride = dw * 4;
++		}
++
++		ret = argbToNV12(src, srcStride,
++				 destination->plane(0).data(),
++				 destination->stride(0),
++				 destination->plane(1).data(),
++				 destination->stride(1),
++				 dw, dh);
++		break;
++	}
++	default:
++		LOG(YUV, Error) << "Unsupported source format " << sourceFormat_;
++		processComplete.emit(streamBuffer, PostProcessor::Status::Error);
++		return;
++	}
++
+ 	if (ret) {
+-		LOG(YUV, Error) << "Failed NV12 scaling: " << ret;
++		LOG(YUV, Error) << "Libyuv operation failure: " << ret;
+ 		processComplete.emit(streamBuffer, PostProcessor::Status::Error);
+ 		return;
+ 	}
+ 
+ 	processComplete.emit(streamBuffer, PostProcessor::Status::Success);
++}
++
++/*
++ * Convert to NV12 in the range the stream declares. libyuv has no full
++ * range NV12 conversion: go through I420 and interleave the chroma.
++ */
++int PostProcessorYuv::argbToNV12(const uint8_t *src, int srcStride,
++				 uint8_t *dstY, int dstStrideY,
++				 uint8_t *dstUV, int dstStrideUV,
++				 int width, int height)
++{
++	if (!fullRange_)
++		return libyuv::ARGBToNV12(src, srcStride, dstY, dstStrideY,
++					  dstUV, dstStrideUV, width, height);
++
++	const int cw = (width + 1) / 2;
++	const int ch = (height + 1) / 2;
++	chroma_.resize(static_cast<size_t>(cw) * ch * 2);
++	uint8_t *u = chroma_.data();
++	uint8_t *v = u + static_cast<size_t>(cw) * ch;
++
++	int ret = libyuv::ARGBToJ420(src, srcStride, dstY, dstStrideY,
++				     u, cw, v, cw, width, height);
++	if (ret)
++		return ret;
++
++	libyuv::MergeUVPlane(u, cw, v, cw, dstUV, dstStrideUV, cw, ch);
++	return 0;
+ }
+ 
+ bool PostProcessorYuv::isValidBuffers(const FrameBuffer &source,
+ 				      const CameraBuffer &destination) const
+ {
+-	if (source.planes().size() != 2) {
++	if (source.planes().size() != sourceNumPlanes_) {
+ 		LOG(YUV, Error) << "Invalid number of source planes: "
+ 				<< source.planes().size();
+ 		return false;
+ 	}
+-	if (destination.numPlanes() != 2) {
++	if (destination.numPlanes() != destinationNumPlanes_) {
+ 		LOG(YUV, Error) << "Invalid number of destination planes: "
+ 				<< destination.numPlanes();
+ 		return false;
+ 	}
+ 
+-	if (source.planes()[0].length < sourceLength_[0] ||
+-	    source.planes()[1].length < sourceLength_[1]) {
+-		LOG(YUV, Error)
+-			<< "The source planes lengths are too small, actual size: {"
+-			<< source.planes()[0].length << ", "
+-			<< source.planes()[1].length
+-			<< "}, expected size: {"
+-			<< sourceLength_[0] << ", "
+-			<< sourceLength_[1] << "}";
+-		return false;
+-	}
+-	if (destination.plane(0).size() < destinationLength_[0] ||
+-	    destination.plane(1).size() < destinationLength_[1]) {
+-		LOG(YUV, Error)
+-			<< "The destination planes lengths are too small, actual size: {"
+-			<< destination.plane(0).size() << ", "
+-			<< destination.plane(1).size()
+-			<< "}, expected size: {"
+-			<< sourceLength_[0] << ", "
+-			<< sourceLength_[1] << "}";
+-		return false;
++	for (unsigned int i = 0; i < sourceNumPlanes_; i++) {
++		if (source.planes()[i].length < sourceLength_[i]) {
++			LOG(YUV, Error)
++				<< "The source planes lengths are too small, "
++				<< "actual size[" << i << "]="
++				<< source.planes()[i].length
++				<< ", expected size[" << i << "]="
++				<< sourceLength_[i];
++			return false;
++		}
++	}
++	/* The destination stride is the buffer's, which may be padded. */
++	const PixelFormatInfo &destinationInfo = PixelFormatInfo::info(destinationFormat_);
++	for (unsigned int i = 0; i < destinationNumPlanes_; i++) {
++		const unsigned int length =
++			destinationInfo.planeSize(destinationSize_.height, i,
++						  destination.stride(i));
++		if (destination.plane(i).size() < length) {
++			LOG(YUV, Error)
++				<< "The destination planes lengths are too small, "
++				<< "actual size[" << i << "]="
++				<< destination.plane(i).size()
++				<< ", expected size[" << i << "]="
++				<< length;
++			return false;
++		}
+ 	}
+ 
+ 	return true;
+@@ -132,15 +279,16 @@
+ {
+ 	sourceSize_ = inCfg.size;
+ 	destinationSize_ = outCfg.size;
+-
+-	const PixelFormatInfo &nv12Info = PixelFormatInfo::info(formats::NV12);
+-	for (unsigned int i = 0; i < 2; i++) {
++	sourceFormat_ = inCfg.pixelFormat;
++	destinationFormat_ = outCfg.pixelFormat;
++
++	const PixelFormatInfo &sourceInfo = PixelFormatInfo::info(sourceFormat_);
++	sourceNumPlanes_ = sourceInfo.numPlanes();
++	for (unsigned int i = 0; i < sourceInfo.numPlanes(); i++) {
+ 		sourceStride_[i] = inCfg.stride;
+-		destinationStride_[i] = nv12Info.stride(destinationSize_.width, i, 1);
+-
+-		sourceLength_[i] = nv12Info.planeSize(sourceSize_.height, i,
+-						      sourceStride_[i]);
+-		destinationLength_[i] = nv12Info.planeSize(destinationSize_.height, i,
+-							   destinationStride_[i]);
+-	}
+-}
++		sourceLength_[i] = sourceInfo.planeSize(sourceSize_.height, i,
++							sourceStride_[i]);
++	}
++
++	destinationNumPlanes_ = PixelFormatInfo::info(destinationFormat_).numPlanes();
++}
+diff --git a/src/android/yuv/post_processor_yuv.h b/src/android/yuv/post_processor_yuv.h
+--- a/src/android/yuv/post_processor_yuv.h
++++ b/src/android/yuv/post_processor_yuv.h
+@@ -7,6 +7,8 @@
+ 
+ #pragma once
+ 
++#include <vector>
++
+ #include "../post_processor.h"
+ 
+ #include <libcamera/geometry.h>
+@@ -14,7 +16,14 @@
+ class PostProcessorYuv : public PostProcessor
+ {
+ public:
+-	PostProcessorYuv() = default;
++	/*
++	 * fullRange selects full range BT.601 (JFIF) for the YUV output of
++	 * RGB sources, limited range BT.601 otherwise.
++	 */
++	explicit PostProcessorYuv(bool fullRange)
++		: fullRange_(fullRange)
++	{
++	}
+ 
+ 	int configure(const libcamera::StreamConfiguration &incfg,
+ 		      const libcamera::StreamConfiguration &outcfg) override;
+@@ -25,11 +34,20 @@
+ 			    const CameraBuffer &destination) const;
+ 	void calculateLengths(const libcamera::StreamConfiguration &inCfg,
+ 			      const libcamera::StreamConfiguration &outCfg);
++	int argbToNV12(const uint8_t *src, int srcStride, uint8_t *dstY,
++		       int dstStrideY, uint8_t *dstUV, int dstStrideUV,
++		       int width, int height);
++
++	bool fullRange_;
+ 
+ 	libcamera::Size sourceSize_;
+ 	libcamera::Size destinationSize_;
+-	unsigned int sourceLength_[2] = {};
+-	unsigned int destinationLength_[2] = {};
+-	unsigned int sourceStride_[2] = {};
+-	unsigned int destinationStride_[2] = {};
++	libcamera::PixelFormat sourceFormat_;
++	libcamera::PixelFormat destinationFormat_;
++	std::vector<uint8_t> scaled_;
++	std::vector<uint8_t> chroma_;
++	unsigned int sourceLength_[3] = {};
++	unsigned int sourceStride_[3] = {};
++	unsigned int sourceNumPlanes_;
++	unsigned int destinationNumPlanes_;
+ };

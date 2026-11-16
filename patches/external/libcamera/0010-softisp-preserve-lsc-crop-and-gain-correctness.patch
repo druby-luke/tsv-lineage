@@ -1,0 +1,847 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Sat, 14 Nov 2026 22:03:48 -0800
+Subject: [PATCH] softisp: preserve sensor-space LSC mapping and gain range
+
+Adapt the preceding Mei Tao LSC-statistics patch to preserve sensor-
+space calibration geometry and all supported Lenovo mesh gains on
+upstream v0.8.0.
+
+Resample full-reference uniform tables for the actual analogue crop,
+after subtracting the active-area origin. Other IPA engines keep their
+hardware-node table interpretation unless they explicitly request
+resampling. Keep fractional register-domain data until crop
+interpolation, then round and validate rather than silently truncate or
+overflow. Reset the colour-temperature cache when the mode changes and
+populate the first frame even when its initial temperature is zero.
+
+Map normalized sensor coordinates to the centres of the 17x17 texture
+nodes. Correct unpacked Bayer stride padding independently of the
+optical calibration field. Use the same node mapping and profile scale
+for statistics, rebuilding the cached gains when the scale changes even
+if the table version does not. Clamp below-black noise to the preserved
+pedestal before applying gains, matching the renderer's nonnegative
+signal rather than reducing the IPA's averaged brightness with amplified
+negative samples. Preserve CPU/no-LSC statistics.
+
+Default existing profiles to the original RGBA8 scale of four. Allow an
+explicit validated scale for tabular profiles only, and carry it in the
+per-frame debayer parameters and shader uniforms. The ThinkSmart profile
+uses scale 255/59: byte 59 is unity, and 59 is the largest integral
+unity code that preserves the vendor maximum of 4.30724 without
+clipping. This minimizes quantization while retaining RGBA8
+compatibility. The mesh is still not a lossless floating-point
+calibration. Gate LSC in the shader using the actual per-frame enable
+control; disabling it must not accidentally apply the new encoding to
+the legacy identity table. Warn explicitly if a CPU fallback cannot
+apply the configured LSC.
+
+Exercise the actual sensor crop rectangles, asymmetric
+interpolation/orientation, rejected out-of-reference crops, exact unity,
+black-pedestal and saturation handling, and enabled/disabled/CPU-
+fallback statistics. Include the same-version gain-scale transition in
+the focused Android/Meson regression target. The Android regression and
+AGC frame-duration regression pass on ThinkSmart. A sensor-free GLES2
+render check of the actual packed/unpacked RAW10/RAW12 shaders passes on
+both Mesa llvmpipe and the ThinkSmart Adreno 506 (FD506), checking
+padded stride, node mapping, disable, unity and above-four gains within
+two 8-bit output codes. These exercise the implementation, including the
+device GPU, but not camera-buffer/request integration, physical lens
+flat-field correction or factory-equivalent image quality.
+
+Base-commit: df8e348d64b4932a0676256ed24f0da3ee9438bc
+Source: https://github.com/rickx/ubuntu-thinksmart/blob/6f5b14928a873d171e1deddb5edbdc6967c86aa2/sources/patches/libcamera/0002-libcamera-software_isp-Apply-LSC-gains-to-the-sta.patch
+Source: https://github.com/rickx/ubuntu-thinksmart/blob/6f5b14928a873d171e1deddb5edbdc6967c86aa2/sources/camera/tools/make_libcamera_tuning.py
+---
+diff --git a/Android.bp b/Android.bp
+--- a/Android.bp
++++ b/Android.bp
+@@ -742,6 +742,27 @@
+     test_suites: ["device-tests"],
+ }
+ 
++cc_test {
++    name: "libcamera_lsc_test",
++    defaults: ["libcamera_private_defaults"],
++    gtest: false,
++    local_include_dirs: [
++        "src/ipa",
++        "src/ipa/libipa",
++        "test/libtest",
++    ],
++    srcs: [
++        "test/ipa/libipa/lsc.cpp",
++        "test/libtest/test.cpp",
++    ],
++    static_libs: ["libcamera_ipa"],
++    shared_libs: [
++        "libcamera",
++        "libcamera-base",
++    ],
++    test_suites: ["device-tests"],
++}
++
+ cc_binary {
+     name: "cam",
+     defaults: ["libcamera_defaults"],
+diff --git a/include/libcamera/internal/software_isp/debayer_params.h b/include/libcamera/internal/software_isp/debayer_params.h
+--- a/include/libcamera/internal/software_isp/debayer_params.h
++++ b/include/libcamera/internal/software_isp/debayer_params.h
+@@ -51,6 +51,7 @@
+ 	alignas(4) LscLookupTable lscLut = identityLscLut;
+ 	uint64_t lscLutVersion = 0;
+ 	bool lscEnabled = false;
++	float lscGainScale = 4.0f;
+ };
+ 
+ } /* namespace libcamera */
+diff --git a/include/libcamera/internal/software_isp/lsc_stats.h b/include/libcamera/internal/software_isp/lsc_stats.h
+--- a/include/libcamera/internal/software_isp/lsc_stats.h
++++ b/include/libcamera/internal/software_isp/lsc_stats.h
+@@ -22,13 +22,14 @@
+ 	uint16_t blue;
+ };
+ 
+-/* Match GL_LINEAR, GL_CLAMP_TO_EDGE and RGBA8 * 4.0, quantized to Q10. */
++/* Match GL_LINEAR, GL_CLAMP_TO_EDGE and the RGBA8 gain scale, quantized to Q10. */
+ inline uint16_t sampleLscStatsGain(const DebayerParams::LscLookupTable &lut,
+-				   double coordX, double coordY, unsigned int channel)
++				   double coordX, double coordY, unsigned int channel,
++				   float gainScale = 4.0f)
+ {
+ 	constexpr unsigned int size = DebayerParams::kLscGridSize;
+-	coordX = std::clamp(coordX * size - 0.5, 0.0, double(size - 1));
+-	coordY = std::clamp(coordY * size - 0.5, 0.0, double(size - 1));
++	coordX = std::clamp(coordX, 0.0, 1.0) * (size - 1);
++	coordY = std::clamp(coordY, 0.0, 1.0) * (size - 1);
+ 	const unsigned int left = coordX;
+ 	const unsigned int top = coordY;
+ 	const unsigned int right = std::min(left + 1, size - 1);
+@@ -42,15 +43,14 @@
+ 	const double lower = value(left, bottom) * (1.0 - fractionX) + value(right, bottom) * fractionX;
+ 	const double filtered = upper * (1.0 - fractionY) + lower * fractionY;
+ 
+-	/* UNORM8 divides by 255, not 256: a table byte of 64 is 256/255. */
+-	return std::lround(filtered * (4.0 * 1024.0 / 255.0));
++	return std::lround(filtered * (gainScale * 1024.0 / 255.0));
+ }
+ 
+ inline uint16_t applyLscStatsGain(uint16_t value, uint16_t gain,
+ 				  uint16_t black, uint16_t maximum)
+ {
+ 	/* Keep the pedestal for the IPA's existing AWB/AGC black subtraction. */
+-	const int32_t signal = int32_t(value) - black;
++	const int32_t signal = std::max(int32_t(value) - black, 0);
+ 	const int32_t corrected = black + ((signal * gain + 512) >> 10);
+ 	return std::clamp(corrected, 0, int32_t(maximum));
+ }
+diff --git a/include/libcamera/internal/software_isp/swstats_cpu.h b/include/libcamera/internal/software_isp/swstats_cpu.h
+--- a/include/libcamera/internal/software_isp/swstats_cpu.h
++++ b/include/libcamera/internal/software_isp/swstats_cpu.h
+@@ -131,6 +131,7 @@
+ 	Size lscTextureSize_;
+ 	RGB<uint16_t> blackLevel_;
+ 	std::optional<uint64_t> lscLutVersion_;
++	std::optional<float> lscGainScale_;
+ 	std::vector<LscStatsGains> lscGains_;
+ 
+ 	std::vector<SwIspStats> stats_;
+diff --git a/src/ipa/libipa/lsc.h b/src/ipa/libipa/lsc.h
+--- a/src/ipa/libipa/lsc.h
++++ b/src/ipa/libipa/lsc.h
+@@ -7,6 +7,8 @@
+ 
+ #pragma once
+ 
++#include <cmath>
++#include <limits>
+ #include <memory>
+ #include <span>
+ #include <vector>
+@@ -20,6 +22,8 @@
+ #include "lsc_base.h"
+ 
+ namespace libcamera {
++
++LOG_DECLARE_CATEGORY(Lsc)
+ 
+ namespace ipa {
+ 
+@@ -91,6 +95,8 @@
+ 	{
+ 		LscImplementation::ComponentsMap data =
+ 			impl_->sampleForCrop(analogCrop, xPos, yPos);
++		if (data.empty())
++			return -EINVAL;
+ 
+ 		ComponentsMap lscData;
+ 		for (const auto &[t, c] : data) {
+@@ -102,13 +108,20 @@
+ 
+ 				for (const float &gain : gains) {
+ 					/*
+-					 * Tabular LSC tables already store
+-					 * quantized values.
++					 * Round resampled register-domain
++					 * tables only after crop interpolation.
+ 					 */
+ 					if (polynomial_)
+ 						quantizedGains.push_back(U(gain).quantized());
+-					else
+-						quantizedGains.push_back(gain);
++					else {
++						const double value = std::round(gain);
++						if (!std::isfinite(value) || value < 0.0 ||
++						    value > std::numeric_limits<typename U::QuantizedType>::max()) {
++							LOG(Lsc, Error) << "LSC gain exceeds the register range";
++							return -EINVAL;
++						}
++						quantizedGains.push_back(value);
++					}
+ 				}
+ 			}
+ 		}
+diff --git a/src/ipa/libipa/lsc_base.cpp b/src/ipa/libipa/lsc_base.cpp
+--- a/src/ipa/libipa/lsc_base.cpp
++++ b/src/ipa/libipa/lsc_base.cpp
+@@ -32,12 +32,19 @@
+  * \brief Number of vertical gain samples of the ISP LSC grid. Used for
+  * validating the list of gains parsed from tuning file
+  *
++ * \var LscDescriptor::resampleTable
++ * \brief Whether tables describe a uniform full-reference sensor grid
++ *
++ * Enable crop resampling for such tables. Leave this disabled for tables
++ * already calibrated at hardware-specific mesh nodes.
++ */
++
++/**
+  * \var LscDescriptor::sensorSize
+- * \brief The physical sensor size. This is the largest frame size used to
+- * generate the LSC table. Only used by the polynomial LSC algorithm
++ * \brief Size of the sensor reference area used to generate the LSC data
+  *
+- * \todo: Most likely the reference frame should be native_size.
+- * Let's wait how the internal discussions progress.
++ * Used by polynomial fitting and opt-in uniform-table resampling. Crop
++ * coordinates are relative to this reference area.
+  */
+ 
+ /**
+diff --git a/src/ipa/libipa/lsc_base.h b/src/ipa/libipa/lsc_base.h
+--- a/src/ipa/libipa/lsc_base.h
++++ b/src/ipa/libipa/lsc_base.h
+@@ -28,6 +28,7 @@
+ 	unsigned int numHSamples;
+ 	unsigned int numVSamples;
+ 	Size sensorSize;
++	bool resampleTable = false;
+ };
+ 
+ class LscImplementation
+diff --git a/src/ipa/libipa/lsc_table.cpp b/src/ipa/libipa/lsc_table.cpp
+--- a/src/ipa/libipa/lsc_table.cpp
++++ b/src/ipa/libipa/lsc_table.cpp
+@@ -6,6 +6,9 @@
+  */
+ 
+ #include "lsc_table.h"
++
++#include <algorithm>
++#include <cmath>
+ 
+ namespace libcamera {
+ 
+@@ -40,6 +43,15 @@
+ int LscTable::parseLscData(const ValueNode &sets,
+ 			   const LscDescriptor &descriptor)
+ {
++	if (descriptor.sensorSize.width < 2 || descriptor.sensorSize.height < 2 ||
++	    descriptor.numHSamples < 2 || descriptor.numVSamples < 2) {
++		LOG(LscTable, Error) << "Invalid LSC reference dimensions";
++		return -EINVAL;
++	}
++	sensorSize_ = descriptor.sensorSize;
++	gridSize_ = { descriptor.numHSamples, descriptor.numVSamples };
++	resample_ = descriptor.resampleTable;
++
+ 	for (const auto &set : sets.asList()) {
+ 		uint32_t ct = set["ct"].get<uint32_t>(0);
+ 
+@@ -54,6 +66,65 @@
+ 	}
+ 
+ 	return 0;
++}
++
++/**
++ * \brief Sample a full-reference, uniformly spaced table for a sensor crop
++ * \param[in] cropRectangle Crop relative to the reference sensor area
++ * \param[in] xPos Normalized horizontal positions of the destination nodes
++ * \param[in] yPos Normalized vertical positions of the destination nodes
++ * \return Resampled components, or an empty map for invalid geometry
++ */
++LscImplementation::ComponentsMap
++LscTable::sampleForCrop(const Rectangle &cropRectangle,
++		       std::span<const double> xPos, std::span<const double> yPos)
++{
++	if (!resample_)
++		return lscData_;
++
++	auto validPositions = [](std::span<const double> positions) {
++		return !positions.empty() &&
++		       std::all_of(positions.begin(), positions.end(), [](double position) {
++			       return std::isfinite(position) && position >= 0.0 && position <= 1.0;
++		       });
++	};
++	if (cropRectangle.isNull() ||
++	    cropRectangle.boundedTo(Rectangle(sensorSize_)) != cropRectangle ||
++	    !validPositions(xPos) || !validPositions(yPos)) {
++		LOG(LscTable, Error) << "Invalid LSC crop or sampling positions";
++		return {};
++	}
++
++	ComponentsMap result;
++	for (const auto &[temperature, components] : lscData_) {
++		for (const auto &[channel, table] : components) {
++			auto &samples = result[temperature][channel];
++			samples.reserve(xPos.size() * yPos.size());
++			for (double y : yPos) {
++				const double sourceY =
++					(cropRectangle.y + y * (cropRectangle.height - 1)) *
++					(gridSize_.height - 1) / (sensorSize_.height - 1);
++				const unsigned int top = std::floor(sourceY);
++				const unsigned int bottom = std::min(top + 1, gridSize_.height - 1);
++				const double fy = sourceY - top;
++				for (double x : xPos) {
++					const double sourceX =
++						(cropRectangle.x + x * (cropRectangle.width - 1)) *
++						(gridSize_.width - 1) / (sensorSize_.width - 1);
++					const unsigned int left = std::floor(sourceX);
++					const unsigned int right = std::min(left + 1, gridSize_.width - 1);
++					const double fx = sourceX - left;
++					auto at = [&](unsigned int column, unsigned int row) {
++						return table[row * gridSize_.width + column];
++					};
++					const double upper = at(left, top) * (1.0 - fx) + at(right, top) * fx;
++					const double lower = at(left, bottom) * (1.0 - fx) + at(right, bottom) * fx;
++					samples.push_back(upper * (1.0 - fy) + lower * fy);
++				}
++			}
++		}
++	}
++	return result;
+ }
+ 
+ int LscTable::parseLscComponent(const ValueNode &yamlSet,
+@@ -108,6 +179,12 @@
+ 			<< " elements, got " << table.size();
+ 		return {};
+ 	}
++	if (!std::all_of(table.begin(), table.end(), [](float gain) {
++		    return std::isfinite(gain) && gain >= 0.0f;
++	    })) {
++		LOG(LscTable, Error) << "Invalid gain in '" << prop << "' table";
++		return {};
++	}
+ 
+ 	return table;
+ }
+diff --git a/src/ipa/libipa/lsc_table.h b/src/ipa/libipa/lsc_table.h
+--- a/src/ipa/libipa/lsc_table.h
++++ b/src/ipa/libipa/lsc_table.h
+@@ -29,14 +29,8 @@
+ 			 const LscDescriptor &descriptor) override;
+ 
+ 	LscImplementation::ComponentsMap
+-	sampleForCrop([[maybe_unused]] const Rectangle &cropRectangle,
+-		      [[maybe_unused]] std::span<const double> xPos,
+-		      [[maybe_unused]] std::span<const double> yPos) override
+-	{
+-		LOG(LscTable, Warning)
+-			<< "Tabular LSC data doesn't support resampling";
+-		return lscData_;
+-	}
++	sampleForCrop(const Rectangle &cropRectangle,
++		      std::span<const double> xPos, std::span<const double> yPos) override;
+ 
+ private:
+ 	int parseLscComponent(const ValueNode &yamlSet,
+@@ -47,6 +41,9 @@
+ 					 unsigned int numVSamples);
+ 
+ 	LscImplementation::ComponentsMap lscData_;
++	Size sensorSize_;
++	Size gridSize_;
++	bool resample_ = false;
+ };
+ 
+ } /* namespace ipa */
+diff --git a/src/ipa/softisp/algorithms/lsc.cpp b/src/ipa/softisp/algorithms/lsc.cpp
+--- a/src/ipa/softisp/algorithms/lsc.cpp
++++ b/src/ipa/softisp/algorithms/lsc.cpp
+@@ -4,6 +4,8 @@
+  */
+ 
+ #include "lsc.h"
++
++#include <cmath>
+ 
+ #include <libcamera/base/log.h>
+ 
+@@ -17,6 +19,15 @@
+ {
+ 	static constexpr unsigned int kGridSize = DebayerParams::kLscGridSize;
+ 
++	const auto scale = tuningData["gainScale"].get<float>();
++	gainScale_ = scale.value_or(4.0f);
++	if ((tuningData.contains("gainScale") && !scale) ||
++	    !std::isfinite(gainScale_) || gainScale_ < 1.0f || gainScale_ > 32.0f ||
++	    (gainScale_ != 4.0f && tuningData["type"].get<std::string>("table") != "table")) {
++		LOG(IPASoftIspLsc, Error) << "Invalid LSC gain scale " << gainScale_;
++		return -EINVAL;
++	}
++
+ 	for (unsigned int i = 0; i < kGridSize; i++)
+ 		gridPos_.push_back(static_cast<double>(i) / (kGridSize - 1));
+ 
+@@ -24,7 +35,8 @@
+ 			     { .keys = { "r", "g", "b" },
+ 			       .numHSamples = kGridSize,
+ 			       .numVSamples = kGridSize,
+-			       .sensorSize = context.sensorInfo.activeArea.size() });
++			       .sensorSize = context.sensorInfo.activeArea.size(),
++			       .resampleTable = true });
+ 	if (ret)
+ 		return ret;
+ 
+@@ -36,8 +48,18 @@
+ int Lsc::configure(IPAContext &context,
+ 		   [[maybe_unused]] const IPAConfigInfo &configInfo)
+ {
++	Rectangle crop = context.sensorInfo.analogCrop;
++	if (crop.isNull() || crop.boundedTo(context.sensorInfo.activeArea) != crop) {
++		LOG(IPASoftIspLsc, Error) << "Sensor crop is outside the LSC reference area";
++		return -EINVAL;
++	}
++
++	crop.x -= context.sensorInfo.activeArea.x;
++	crop.y -= context.sensorInfo.activeArea.y;
++	lastAppliedCt_ = 0;
++
+ 	return lscAlgo_.configure(context.activeState.lsc,
+-				  context.sensorInfo.analogCrop,
++				  crop,
+ 				  gridPos_, gridPos_);
+ }
+ 
+@@ -51,6 +73,7 @@
+ 
+ 	/* Statistics need the per-frame state, not just the configured shader. */
+ 	params->lscEnabled = frameContext.lsc.enabled;
++	params->lscGainScale = gainScale_;
+ 
+ 	if (!frameContext.lsc.enabled) {
+ 		if (lastAppliedCt_ != 0) {
+@@ -64,7 +87,7 @@
+ 		return;
+ 	}
+ 
+-	if (utils::abs_diff(ct, lastAppliedCt_) < minTemperatureChange)
++	if (lastAppliedCt_ && utils::abs_diff(ct, lastAppliedCt_) < minTemperatureChange)
+ 		return;
+ 
+ 	const auto &set = lscAlgo_.interpolateComponents(ct);
+diff --git a/src/ipa/softisp/algorithms/lsc.h b/src/ipa/softisp/algorithms/lsc.h
+--- a/src/ipa/softisp/algorithms/lsc.h
++++ b/src/ipa/softisp/algorithms/lsc.h
+@@ -44,6 +44,7 @@
+ 	std::vector<double> gridPos_;
+ 
+ 	unsigned int lastAppliedCt_ = 0;
++	float gainScale_ = 4.0f;
+ };
+ 
+ } /* namespace ipa::softisp::algorithms */
+diff --git a/src/libcamera/shaders/bayer_1x_packed.frag b/src/libcamera/shaders/bayer_1x_packed.frag
+--- a/src/libcamera/shaders/bayer_1x_packed.frag
++++ b/src/libcamera/shaders/bayer_1x_packed.frag
+@@ -73,6 +73,8 @@
+ 
+ #if defined(APPLY_LSC)
+ uniform sampler2D lsc_tex;
++uniform float lsc_gain_scale;
++uniform bool lsc_enabled;
+ #endif
+ 
+ float apply_contrast(float value)
+@@ -237,11 +239,10 @@
+ 	rgb = (rgb - blacklevel) / (1.0 - blacklevel);
+ 
+ #if defined(APPLY_LSC)
+-        /* Multiple by 4.0 for UQ<2, 6> -> float conversion:
+-         * texture2D(...) = original_float * 2^6 (quantization) * 1/2^8 (texture byte to float)
+-         * => original_float = texture2D(...) / 2^6 * 2^8 = texture2D(...) * 2^2
+-         */
+-        rgb = rgb * (texture2D(lsc_tex, textureOut).rgb * 4.0);
++        if (lsc_enabled) {
++            vec2 lsc_coord = (textureOut * (float(LSC_GRID_SIZE) - 1.0) + 0.5) / float(LSC_GRID_SIZE);
++            rgb *= texture2D(lsc_tex, lsc_coord).rgb * lsc_gain_scale;
++        }
+ #endif
+ 
+ 	/* Apply AWB gains, and saturate each channel at sensor range */
+diff --git a/src/libcamera/shaders/bayer_unpacked.frag b/src/libcamera/shaders/bayer_unpacked.frag
+--- a/src/libcamera/shaders/bayer_unpacked.frag
++++ b/src/libcamera/shaders/bayer_unpacked.frag
+@@ -32,6 +32,9 @@
+ 
+ #if defined(APPLY_LSC)
+ uniform sampler2D lsc_tex;
++uniform float lsc_gain_scale;
++uniform bool lsc_enabled;
++uniform float stride_factor;
+ #endif
+ 
+ float apply_contrast(float value)
+@@ -140,8 +143,11 @@
+     rgb = (rgb - blacklevel) / (1.0 - blacklevel);
+ 
+ #if defined(APPLY_LSC)
+-    /* Multiple by 4.0 for UQ<2, 6> -> float conversion */
+-    rgb = rgb * (texture2D(lsc_tex, center.xy).rgb * 4.0);
++    if (lsc_enabled) {
++        vec2 lsc_coord = vec2(center.x / stride_factor, center.y);
++        lsc_coord = (lsc_coord * (float(LSC_GRID_SIZE) - 1.0) + 0.5) / float(LSC_GRID_SIZE);
++        rgb *= texture2D(lsc_tex, lsc_coord).rgb * lsc_gain_scale;
++    }
+ #endif
+ 
+     /* Apply AWB gains, and saturate each channel at sensor range */
+diff --git a/src/libcamera/software_isp/debayer_cpu.cpp b/src/libcamera/software_isp/debayer_cpu.cpp
+--- a/src/libcamera/software_isp/debayer_cpu.cpp
++++ b/src/libcamera/software_isp/debayer_cpu.cpp
+@@ -625,7 +625,7 @@
+ int DebayerCpu::configure(const StreamConfiguration &inputCfg,
+ 			  const std::vector<std::reference_wrapper<const StreamConfiguration>> &outputCfgs,
+ 			  bool ccmEnabled,
+-			  [[maybe_unused]] bool lscEnabled)
++			  bool lscEnabled)
+ {
+ 	if (getInputConfig(inputCfg.pixelFormat, inputConfig_) != 0) {
+ 		LOG(Debayer, Error)
+@@ -674,6 +674,8 @@
+ 		return -EINVAL;
+ 
+ 	ccmEnabled_ = ccmEnabled;
++	if (lscEnabled)
++		LOG(Debayer, Warning) << "Lens shading correction requires the GPU debayer";
+ 
+ 	/*
+ 	 * Lookup tables must be initialized because the initial value is used for
+diff --git a/src/libcamera/software_isp/debayer_egl.cpp b/src/libcamera/software_isp/debayer_egl.cpp
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -116,6 +116,8 @@
+ 	textureUniformProjMatrix_ = glGetUniformLocation(programId_, "proj_matrix");
+ 
+ 	textureUniformLsc_ = glGetUniformLocation(programId_, "lsc_tex");
++	lscGainScaleUniform_ = glGetUniformLocation(programId_, "lsc_gain_scale");
++	lscEnabledUniform_ = glGetUniformLocation(programId_, "lsc_enabled");
+ 
+ 	LOG(Debayer, Debug) << "vertexIn " << attributeVertex_ << " textureIn " << attributeTexture_
+ 			    << " tex_y " << textureUniformBayerDataIn_
+@@ -146,8 +148,12 @@
+ 	/* Specify GL_OES_EGL_image_external */
+ 	egl_.pushEnv(shaderEnv, "#extension GL_OES_EGL_image_external: enable");
+ 
+-	if (lscEnabled_)
++	if (lscEnabled_) {
+ 		egl_.pushEnv(shaderEnv, "#define APPLY_LSC");
++		const std::string gridDefine = "#define LSC_GRID_SIZE " +
++					       std::to_string(DebayerParams::kLscGridSize);
++		egl_.pushEnv(shaderEnv, gridDefine.c_str());
++	}
+ 
+ 	/*
+ 	 * Tell shaders how to re-order output taking account of how the pixels
+@@ -478,6 +484,10 @@
+ 	glUniformMatrix3fv(ccmUniformDataIn_, 1, GL_FALSE, ccm.data().data());
+ 	LOG(Debayer, Debug) << " ccmUniformDataIn_ " << ccmUniformDataIn_ << " data " << params.combinedMatrix;
+ 
++	if (lscEnabled_) {
++		glUniform1f(lscGainScaleUniform_, params.lscGainScale);
++		glUniform1i(lscEnabledUniform_, params.lscEnabled);
++	}
+ 	if (lscEnabled_ && params.lscLutVersion != lscLutVersion_) {
+ 		egl_.updateTexture2D(*eglImageLscLookup_, params.lscLut.data());
+ 		lscLutVersion_ = params.lscLutVersion;
+diff --git a/src/libcamera/software_isp/debayer_egl.h b/src/libcamera/software_isp/debayer_egl.h
+--- a/src/libcamera/software_isp/debayer_egl.h
++++ b/src/libcamera/software_isp/debayer_egl.h
+@@ -106,6 +106,8 @@
+ 
+ 	/* Lens shading correction */
+ 	GLint textureUniformLsc_;
++	GLint lscGainScaleUniform_;
++	GLint lscEnabledUniform_;
+ 
+ 	/* Represent per-frame CCM as a uniform vector of floats 3 x 3 */
+ 	GLint ccmUniformDataIn_;
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -54,17 +54,18 @@
+  */
+ 
+ /**
+- * \fn uint16_t sampleLscStatsGain(const DebayerParams::LscLookupTable &lut, double coordX, double coordY, unsigned int channel)
++ * \fn uint16_t sampleLscStatsGain(const DebayerParams::LscLookupTable &lut, double coordX, double coordY, unsigned int channel, float gainScale)
+  * \brief Sample the GPU lens shading gain field for statistics
+  * \param[in] lut Interleaved RGB lens shading table with a padding byte per cell
+- * \param[in] coordX Normalized horizontal texture coordinate
+- * \param[in] coordY Normalized vertical texture coordinate
++ * \param[in] coordX Normalized horizontal sensor-image coordinate
++ * \param[in] coordY Normalized vertical sensor-image coordinate
+  * \param[in] channel Colour channel, in red, green, blue order
++ * \param[in] gainScale Multiplier for normalized RGBA8 texture values
+  *
+  * Match normalized RGBA8 sampling with bilinear filtering and clamp-to-edge
+- * wrapping. Texture coordinates are mapped to texel centres before filtering.
+- * The shader multiplies the normalized sample by four, so the conversion is
+- * byte * 4 / 255, rather than byte / 64. The result is rounded to Q10 with a
++ * wrapping. Uniform sensor-grid endpoints map to texture texel centres.
++ * The shader multiplies the normalized sample by the profile's gain scale.
++ * The default remains byte * 4 / 255. The result is rounded to Q10 with a
+  * maximum gain error of 1/2048.
+  *
+  * \return The sampled gain in Q10 format
+@@ -557,9 +558,8 @@
+ 	lscLutVersion_.reset();
+ 	lscTextureSize_ = inputCfg.size;
+ 	lscBlueOffset_ = 0;
+-	if (bayerFormat.packing == BayerFormat::Packing::None && bayerFormat.bitDepth)
+-		lscTextureSize_.width = stride_ / ((bayerFormat.bitDepth + 7) / 8);
+-	else if (bayerFormat.order == BayerFormat::GBRG || bayerFormat.order == BayerFormat::RGGB)
++	if (bayerFormat.packing != BayerFormat::Packing::None &&
++	    (bayerFormat.order == BayerFormat::GBRG || bayerFormat.order == BayerFormat::RGGB))
+ 		lscBlueOffset_ = 1;
+ 
+ 	if (bayerFormat.packing == BayerFormat::Packing::None &&
+@@ -686,7 +686,7 @@
+ 	for (unsigned int channel = 0; channel < 3; channel++)
+ 		blackLevel_[channel] = std::lround(params.blackLevel[channel] * 255.0);
+ 
+-	if (lscLutVersion_ == params.lscLutVersion)
++	if (lscLutVersion_ == params.lscLutVersion && lscGainScale_ == params.lscGainScale)
+ 		return;
+ 
+ 	/* One Q10 gain per sampled Bayer component, including both greens. */
+@@ -695,14 +695,14 @@
+ 	lscGains_.resize(lscColumns_ * rows);
+ 	auto gain = [&](unsigned int column, unsigned int row, unsigned int channel) {
+ 		/*
+-		 * Match the shader's input coordinates, including stride_factor:
+-		 * unpacked X uses texture stride, packed X uses image width.
++		 * LSC uses image coordinates, not the padded Bayer texture stride.
+ 		 * Projection scaling cancels when expressed at a raw sample's
+ 		 * pixel centre. No shader flip or centred window_ crop is applied.
+ 		 */
+ 		return sampleLscStatsGain(params.lscLut,
+ 					  (column + 0.5) / lscTextureSize_.width,
+-					  (row + 0.5) / lscTextureSize_.height, channel);
++					  (row + 0.5) / lscTextureSize_.height, channel,
++					  params.lscGainScale);
+ 	};
+ 	for (unsigned int row = 0; row < rows; row++) {
+ 		const unsigned int blueY = (row << lscRowShift_) + swapLines_;
+@@ -719,6 +719,7 @@
+ 		}
+ 	}
+ 	lscLutVersion_ = params.lscLutVersion;
++	lscGainScale_ = params.lscGainScale;
+ }
+ 
+ void SwStatsCpu::processBayerFrame2(MappedFrameBuffer &in)
+diff --git a/test/ipa/libipa/lsc.cpp b/test/ipa/libipa/lsc.cpp
+new file mode 100644
+--- /dev/null
++++ b/test/ipa/libipa/lsc.cpp
+@@ -0,0 +1,166 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++
++#include "lsc_table.h"
++
++#include <array>
++#include <cmath>
++#include <iostream>
++#include <memory>
++#include <sys/mman.h>
++
++#include <libcamera/camera_manager.h>
++#include <libcamera/formats.h>
++#include <libcamera/stream.h>
++
++#include "libcamera/internal/software_isp/lsc_stats.h"
++#include "libcamera/internal/software_isp/swstats_cpu.h"
++
++#include "test.h"
++
++using namespace libcamera;
++
++class LscTest : public Test
++{
++	int checkCrops()
++	{
++		ValueNode sets;
++		auto set = std::make_unique<ValueNode>();
++		set->add("ct", std::make_unique<ValueNode>(std::string("6500")));
++		auto values = std::make_unique<ValueNode>();
++		for (unsigned int y = 0; y < 17; y++)
++			for (unsigned int x = 0; x < 17; x++)
++				values->add(std::make_unique<ValueNode>(
++					std::to_string(32 + 2 * x + 3 * y)));
++		set->add("r", std::move(values));
++		sets.add(std::move(set));
++
++		ipa::LscTable table;
++		if (table.parseLscData(sets, { .keys = { "r" },
++					      .numHSamples = 17, .numVSamples = 17,
++					      .sensorSize = { 2608, 1960 },
++					      .resampleTable = true }))
++			return TestFail;
++
++		const std::array<double, 4> positions{ 0.0, 0.125, 0.5, 1.0 };
++		const std::array<Rectangle, 3> crops{
++			Rectangle(0, 0, 2608, 1960),
++			Rectangle(336, 432, 1936, 1096),
++			Rectangle(8, 244, 2592, 1472),
++		};
++		for (const Rectangle &crop : crops) {
++			auto result = table.sampleForCrop(crop, positions, positions);
++			if (result.empty() || result.at(6500).at("r").size() != 16)
++				return TestFail;
++			const auto &gains = result.at(6500).at("r");
++			for (unsigned int y = 0; y < positions.size(); y++) {
++				for (unsigned int x = 0; x < positions.size(); x++) {
++					const double nx = (crop.x + positions[x] * (crop.width - 1)) / 2607.0;
++					const double ny = (crop.y + positions[y] * (crop.height - 1)) / 1959.0;
++					const double expected = 32 + 32 * nx + 48 * ny;
++					if (std::abs(gains[y * positions.size() + x] - expected) > 0.0001) {
++						std::cerr << "Incorrect LSC crop/orientation for " << crop << std::endl;
++						return TestFail;
++					}
++				}
++			}
++		}
++		for (const Rectangle &invalid : {
++			     Rectangle(0, 0, 2609, 1960),
++			     Rectangle(-1, 0, 2608, 1960),
++			     Rectangle(2607, 0, 2, 1960),
++		     }) {
++			if (!table.sampleForCrop(invalid, positions, positions).empty())
++				return TestFail;
++		}
++		return TestPass;
++	}
++
++	int checkSampling()
++	{
++		DebayerParams::LscLookupTable lut{};
++		for (unsigned int y = 0; y < 17; y++)
++			for (unsigned int x = 0; x < 17; x++)
++				lut[(y * 17 + x) * 4] = 32 + 2 * x + 3 * y;
++
++		for (double y : { 0.0, 0.03125, 0.35, 1.0 })
++			for (double x : { 0.0, 0.03125, 0.65, 1.0 }) {
++				const auto expected = std::lround((1 + x + 1.5 * y) * 1024);
++				if (sampleLscStatsGain(lut, x, y, 0, 255.0f / 32) != expected)
++					return TestFail;
++			}
++
++		lut.fill(59);
++		if (sampleLscStatsGain(lut, 0.5, 0.5, 0, 255.0f / 59) != 1024 ||
++		    applyLscStatsGain(64, 2048, 64, 1023) != 64 ||
++		    applyLscStatsGain(0, 2048, 64, 1023) != 64 ||
++		    applyLscStatsGain(400, 2048, 64, 1023) != 736 ||
++		    applyLscStatsGain(900, 2048, 64, 1023) != 1023)
++			return TestFail;
++		return TestPass;
++	}
++
++	int checkStatistics()
++	{
++		CameraManager manager;
++		SwStatsCpu stats(manager);
++		if (!stats.isValid())
++			return TestFail;
++		StreamConfiguration config;
++		config.pixelFormat = formats::SGRBG10;
++		config.size = { 64, 16 };
++		config.stride = 256;
++		if (stats.configure(config))
++			return TestFail;
++		stats.setWindow({ 8, 2, 16, 8 });
++
++		DebayerParams params{};
++		params.lscLut.fill(32);
++		params.lscLutVersion = 1;
++		params.lscGainScale = 255.0f / 32;
++		params.blackLevel = RGB<double>(16.0f / 255);
++		std::array<uint16_t, 128> raw;
++		raw.fill(400);
++		const uint8_t *line = reinterpret_cast<const uint8_t *>(raw.data());
++		const uint8_t *lines[] = { line, line, line };
++
++		auto capture = [&](bool enabled, bool available, float scale, unsigned int expected) {
++			params.lscEnabled = enabled;
++			params.lscGainScale = scale;
++			stats.setDebayerParams(params, available);
++			stats.startFrame(0);
++			for (unsigned int y = 0; y < 16; y += 4)
++				stats.processLine0(0, y, lines);
++			stats.finishFrame(0, 0);
++
++			void *address = mmap(nullptr, sizeof(SwIspStats), PROT_READ, MAP_SHARED,
++					     stats.getStatsFD().get(), 0);
++			if (address == MAP_FAILED)
++				return false;
++			const SwIspStats result = *static_cast<const SwIspStats *>(address);
++			munmap(address, sizeof(SwIspStats));
++			return result.valid && result.numPixels_ &&
++			       result.sum_.r() == result.numPixels_ * expected &&
++			       result.sum_.g() == result.numPixels_ * expected &&
++			       result.sum_.b() == result.numPixels_ * expected;
++		};
++		/* Same LUT version, different scale must rebuild the cached gains. */
++		if (!capture(true, true, 255.0f / 32, 100) ||
++		    !capture(true, true, 255.0f / 64, 58) ||
++		    !capture(false, true, 255.0f / 32, 100) ||
++		    !capture(true, false, 255.0f / 32, 100))
++			return TestFail;
++		return TestPass;
++	}
++
++protected:
++	int run() override
++	{
++		if (checkCrops() || checkSampling() || checkStatistics()) {
++			std::cerr << "Lens shading regression failed" << std::endl;
++			return TestFail;
++		}
++		return TestPass;
++	}
++};
++
++TEST_REGISTER(LscTest)
+diff --git a/test/ipa/libipa/meson.build b/test/ipa/libipa/meson.build
+--- a/test/ipa/libipa/meson.build
++++ b/test/ipa/libipa/meson.build
+@@ -5,6 +5,7 @@
+     {'name': 'fixedpoint', 'sources': ['fixedpoint.cpp']},
+     {'name': 'histogram', 'sources': ['histogram.cpp']},
+     {'name': 'interpolator', 'sources': ['interpolator.cpp']},
++    {'name': 'lsc', 'sources': ['lsc.cpp']},
+     {'name': 'pwl', 'sources': ['pwl.cpp'] },
+     {'name': 'quantized', 'sources': ['quantized.cpp']},
+ ]

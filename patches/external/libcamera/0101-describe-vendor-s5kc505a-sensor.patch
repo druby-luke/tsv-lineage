@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Sat, 14 Nov 2026 22:03:48 -0800
+Subject: [PATCH] libcamera: describe the Lenovo S5KC505A sensor and gain
+
+Adapt Mei Tao's S5KC505A gain helper as distributed by rickx, adding
+Lenovo-derived sensor properties. The analogue gain is code/32 and the
+RAW10 black pedestal is 64, represented as 4096 in libcamera's 16-bit
+domain.
+
+Use the 1.4 um pixel pitch, test-pattern register values and two-frame
+pipeline delay documented in jethac's Lenovo sensor-library decode.
+Applying that pipeline delay to individual controls is the existing
+vendor-based approximation, not an independently measured latency.
+
+The companion ThinkSmart device profile in config/s5kc505a.yaml uses the
+five CCMs at 2300, 2850, 4000, 5000 and 6500 K from rickx's numeric
+s5kc505a_tuning.json, without transposition or empirical colour
+adjustment. Those values were decoded from Lenovo CD-18781Y210228.109
+libchromatix_s5kc505a_*.so, chromatix version 0x0309. The original
+source notices remain applicable; this does not assert redistribution
+rights over proprietary libraries.
+
+The profile also uses the four shared firmware LSC sets at 2300, 2850,
+4000 and 6500 K. tools/generate-s5kc505a-tuning.py converts the 13x17
+vendor rows to 17x17, retains register-domain fractions for subsequent
+mode-crop resampling, and averages Gr/Gb because the upstream post-
+demosaic renderer has one green gain. The maximum vendor Gr/Gb relative
+mismatch is 1.6226%; averaging is a bounded approximation, not a
+reconstruction of four-channel Qualcomm rolloff.
+
+Keep these meshes unrotated. Rickx rotates them 180 degrees for its H/V
+flips, whereas the Lenovo sensor start sequence and our driver use
+register 0x0101 = 0. Android's 270-degree mounting metadata is not a
+mesh rotation. Patch 0010 implements the normalized active-area crops
+and texture-node mapping and supports all shared vendor gains without
+byte clipping. The profile uses scale 255/59 rather than the lossy
+gain*64 conversion.
+
+The committed reference JSON has no unit-specific OTP or residual. Those
+shared firmware values are not a donor-unit residual calibration; no
+evidence here establishes whether different units have equal or
+different residual shading. The converter reads only the explicitly
+supplied JSON and never searches for a residual file. Shared firmware
+references and synthetic checks do not establish a physical flat-field
+error bound.
+
+At the four reference illuminants, comparing the mode-resampled and
+rounded 8-bit mesh against the original shared three-channel mesh bounds
+conversion/crop/quantization gain error at 2.568% across the supported
+analogue crops. This excludes Gr/Gb averaging and does not establish a
+physical calibration tolerance. Upstream colour-temperature
+interpolation and its 100 K update threshold are retained, not claimed
+to reproduce Qualcomm's illuminant policy.
+
+Use Rickx's empirical relativeLuminanceTarget 0.12 as the initial AGC
+policy, overriding upstream's default 0.16. This is a 25% lower scene-
+linear mean-luminance target, not a Lenovo factory AEC value or a
+guaranteed 25% change in displayed brightness. The older TI stack uses a
+different histogram-based exposure policy; this is a comparison within
+the new upstream implementation.
+
+Do not import per-unit OTP/residuals, unverified vendor AWB or gamma
+translations, stretchGain 4, a global 100 ms IPA exposure cap, or custom
+highlight, white-balance and hot-pixel heuristics. The Android HAL
+separately supports the device configuration's chosen 10-30 FPS range;
+this is not vendor optical tuning. Retain upstream AWB and Adjust and
+the upstream AGC algorithms apart from that explicit target. The vendor
+gamma14 array is a full tone curve, not interchangeable with the scalar
+Gamma control. Copying vendor coefficients is not proof of colour
+accuracy or reproduction of Qualcomm's algorithms.
+
+Base-commit: df8e348d64b4932a0676256ed24f0da3ee9438bc
+Source: https://github.com/rickx/ubuntu-thinksmart/blob/6f5b14928a873d171e1deddb5edbdc6967c86aa2/sources/patches/libcamera/0001-ipa-libipa-camera_sensor_helper-Add-Samsung-S5KC5.patch
+Source: https://github.com/rickx/ubuntu-thinksmart/blob/6f5b14928a873d171e1deddb5edbdc6967c86aa2/sources/camera/tools/s5kc505a_tuning.json
+Source: https://github.com/rickx/ubuntu-thinksmart/blob/6f5b14928a873d171e1deddb5edbdc6967c86aa2/sources/camera/config/s5kc505a.yaml
+Source: https://github.com/jethac/lenovo-thinksmart-view/blob/fe9c0a58a1a2b7c4893f2ff76ff5c0b90206d458/streams/camera/s5kc505a-sensor-lib-decode.txt
+---
+diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -887,6 +887,17 @@
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("ov13858", CameraSensorHelperOv13858)
+ 
++class CameraSensorHelperS5kc505a : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperS5kc505a()
++	{
++		blackLevel_ = 4096;
++		gain_ = AnalogueGainLinear{ 1, 0, 0, 32 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("s5kc505a", CameraSensorHelperS5kc505a)
++
+ class CameraSensorHelperVd55g1 : public CameraSensorHelper
+ {
+ public:
+diff --git a/src/libcamera/sensor/camera_sensor_properties.cpp b/src/libcamera/sensor/camera_sensor_properties.cpp
+--- a/src/libcamera/sensor/camera_sensor_properties.cpp
++++ b/src/libcamera/sensor/camera_sensor_properties.cpp
+@@ -571,6 +571,22 @@
+ 			},
+ 			.sensorDelays = { },
+ 		} },
++		{ "s5kc505a", {
++			.unitCellSize = { 1400, 1400 },
++			.testPatternModes = {
++				{ controls::draft::TestPatternModeOff, 0 },
++				{ controls::draft::TestPatternModeSolidColor, 1 },
++				{ controls::draft::TestPatternModeColorBars, 2 },
++				{ controls::draft::TestPatternModeColorBarsFadeToGray, 3 },
++				{ controls::draft::TestPatternModePn9, 4 },
++			},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2,
++			},
++		} },
+ 		{ "vd55g1", {
+ 			.unitCellSize = { 2160, 2160 },
+ 			.testPatternModes = {

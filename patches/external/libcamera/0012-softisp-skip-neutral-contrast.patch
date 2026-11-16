@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Sun, 15 Nov 2026 17:19:19 -0800
+Subject: [PATCH] softisp: skip neutral contrast in GPU shaders
+
+Skip the three per-channel contrast pow operations when the contrast
+exponent is exactly one, the default neutral setting. The existing
+S-curve is then mathematically the identity. Apply the same uniform fast
+path to the packed and unpacked Bayer GPU shaders.
+
+Keep the clamp before contrast and the gamma transform after it outside
+the conditional. Retain the original S-curve for every non-neutral
+exponent, including values adjacent to one; do not use an approximate
+comparison or change contrast controls, demosaicing, optical correction,
+white balance or exposure policy.
+
+On FD506 at 650 MHz, a pre-uploaded 2608x1960 RAW10 capture rendered
+into a 2600x1960 RGBA texture takes 53.45 ms before versus 36.88 ms
+after at neutral contrast. Across the captured output, three 8-bit
+channel values differ by one code. Non-neutral exponents 0.5 and 2.0
+retain identical pixels but incur about 0.9 ms of additional GPU time
+from the conditional.
+
+This optimization does not imply a matching end-to-end camera frame-rate
+increase or remove statistics and Android conversion costs.
+
+Base-commit: df8e348d64b4932a0676256ed24f0da3ee9438bc
+---
+diff --git a/src/libcamera/shaders/bayer_1x_packed.frag b/src/libcamera/shaders/bayer_1x_packed.frag
+--- a/src/libcamera/shaders/bayer_1x_packed.frag
++++ b/src/libcamera/shaders/bayer_1x_packed.frag
+@@ -256,9 +256,11 @@
+ 	 * contrastExp 0..2 contrast to 0..infinity; avoid actual infinity at tan(pi/2)
+ 	 */
+ 	rgb = clamp(rgb, 0.0, 1.0);
+-	rgb.r = apply_contrast(rgb.r);
+-	rgb.g = apply_contrast(rgb.g);
+-	rgb.b = apply_contrast(rgb.b);
++	if (contrastExp != 1.0) {
++		rgb.r = apply_contrast(rgb.r);
++		rgb.g = apply_contrast(rgb.g);
++		rgb.b = apply_contrast(rgb.b);
++	}
+ 
+ 	/* Apply gamma after colour correction */
+ 	rgb = pow(rgb, vec3(gamma));
+diff --git a/src/libcamera/shaders/bayer_unpacked.frag b/src/libcamera/shaders/bayer_unpacked.frag
+--- a/src/libcamera/shaders/bayer_unpacked.frag
++++ b/src/libcamera/shaders/bayer_unpacked.frag
+@@ -160,9 +160,11 @@
+      * Contrast
+      */
+     rgb = clamp(rgb, 0.0, 1.0);
+-    rgb.r = apply_contrast(rgb.r);
+-    rgb.g = apply_contrast(rgb.g);
+-    rgb.b = apply_contrast(rgb.b);
++    if (contrastExp != 1.0) {
++        rgb.r = apply_contrast(rgb.r);
++        rgb.g = apply_contrast(rgb.g);
++        rgb.b = apply_contrast(rgb.b);
++    }
+ 
+     /* Apply gamma after colour correction */
+     rgb = pow(rgb, vec3(gamma));

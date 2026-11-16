@@ -1,0 +1,179 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Sat, 14 Nov 2026 22:03:48 -0800
+Subject: [PATCH] android: package the provider and SoftISP in a vendor APEX
+
+Retain the previously boot-tested ThinkSmart vendor APEX layout, camera
+provider service and libcamera/0 VINTF instance while packaging the
+upstream softisp IPA.
+
+Without an IPA public key, allow in-process loading only for
+ipa_softisp.so at its fixed path inside the verified camera-provider
+APEX. Do not trust arbitrary discovered modules or bypass an explicit
+force-isolation request.
+
+When invoking the standalone vendor cam binary, include
+/apex/com.android.hardware.camera.libcamera/lib64 and its libcamera
+subdirectory in LD_LIBRARY_PATH. Android's isolated vendor linker
+namespace otherwise rejects the APEX IPA module and only RAW capture
+remains available. The provider already executes in its APEX namespace.
+This does not extend the IPA trust exception to other paths.
+
+Base-commit: df8e348d64b4932a0676256ed24f0da3ee9438bc
+---
+diff --git a/include/libcamera/internal/ipa_manager.h b/include/libcamera/internal/ipa_manager.h
+--- a/include/libcamera/internal/ipa_manager.h
++++ b/include/libcamera/internal/ipa_manager.h
+@@ -78,6 +78,8 @@
+ #if HAVE_IPA_PUBKEY
+ 	static const uint8_t publicKeyData_[];
+ 	static const PubKey pubKey_;
++#endif
++#if HAVE_IPA_PUBKEY || defined(__ANDROID__)
+ 	bool forceIsolation_;
+ #endif
+ };
+diff --git a/src/android/hal/provider/Android.bp b/src/android/hal/provider/Android.bp
+--- a/src/android/hal/provider/Android.bp
++++ b/src/android/hal/provider/Android.bp
+@@ -38,18 +38,51 @@
+     srcs: ["LibcameraProvider.cpp"],
+     export_include_dirs: ["."],
+     defaults: ["libcamera_aidl_defaults"],
++    installable: false,
+ }
+ 
+ cc_defaults {
+     name: "camera_service.libcamera_defaults",
+     relative_install_path: "hw",
+     srcs: ["service.cpp"],
+-    shared_libs: ["android.hardware.camera.provider-V1-libcamera-impl"],
++    shared_libs: [
++        "android.hardware.camera.provider-V1-libcamera-impl",
++        "camera.libcamera",
++    ],
+     defaults: ["libcamera_aidl_defaults"],
+ }
+ 
+ cc_binary {
+     name: "android.hardware.camera.provider-V1-libcamera-service",
+-    init_rc: ["android.hardware.camera.provider-V1-libcamera-service.rc"],
+     defaults: ["camera_service.libcamera_defaults"],
++    installable: false,
+ }
++
++prebuilt_etc {
++    name: "android.hardware.camera.libcamera.rc",
++    src: "android.hardware.camera.provider-V1-libcamera-service.rc",
++    installable: false,
++}
++
++prebuilt_etc {
++    name: "android.hardware.camera.libcamera.xml",
++    src: "provider-libcamera.xml",
++    sub_dir: "vintf",
++    installable: false,
++}
++
++apex {
++    name: "com.android.hardware.camera.libcamera",
++    manifest: "apex_manifest.json",
++    file_contexts: "apex_file_contexts",
++    key: "com.android.hardware.key",
++    certificate: ":com.android.hardware.certificate",
++    updatable: false,
++    vendor: true,
++    binaries: ["android.hardware.camera.provider-V1-libcamera-service"],
++    native_shared_libs: ["ipa_softisp"],
++    prebuilts: [
++        "android.hardware.camera.libcamera.rc",
++        "android.hardware.camera.libcamera.xml",
++    ],
++}
+diff --git a/src/android/hal/provider/android.hardware.camera.provider-V1-libcamera-service.rc b/src/android/hal/provider/android.hardware.camera.provider-V1-libcamera-service.rc
+--- a/src/android/hal/provider/android.hardware.camera.provider-V1-libcamera-service.rc
++++ b/src/android/hal/provider/android.hardware.camera.provider-V1-libcamera-service.rc
+@@ -1,4 +1,4 @@
+-service vendor.camera.provider-libcamera /vendor/bin/hw/android.hardware.camera.provider-V1-libcamera-service
++service vendor.camera.provider-libcamera /apex/com.android.hardware.camera.libcamera/bin/hw/android.hardware.camera.provider-V1-libcamera-service
+     interface aidl android.hardware.camera.provider.ICameraProvider/libcamera/0
+     class hal
+     user cameraserver
+diff --git a/src/android/hal/provider/apex_file_contexts b/src/android/hal/provider/apex_file_contexts
+new file mode 100644
+--- /dev/null
++++ b/src/android/hal/provider/apex_file_contexts
+@@ -0,0 +1,3 @@
++(/.*)? u:object_r:vendor_file:s0
++/etc(/.*)? u:object_r:vendor_configs_file:s0
++/bin/hw/android\.hardware\.camera\.provider-V1-libcamera-service u:object_r:hal_camera_default_exec:s0
+diff --git a/src/android/hal/provider/apex_manifest.json b/src/android/hal/provider/apex_manifest.json
+new file mode 100644
+--- /dev/null
++++ b/src/android/hal/provider/apex_manifest.json
+@@ -0,0 +1,4 @@
++{
++    "name": "com.android.hardware.camera.libcamera",
++    "version": 1
++}
+diff --git a/src/android/hal/provider/provider-libcamera.xml b/src/android/hal/provider/provider-libcamera.xml
+new file mode 100644
+--- /dev/null
++++ b/src/android/hal/provider/provider-libcamera.xml
+@@ -0,0 +1,10 @@
++<manifest version="1.0" type="device">
++    <hal format="aidl">
++        <name>android.hardware.camera.provider</name>
++        <version>1</version>
++        <interface>
++            <name>ICameraProvider</name>
++            <instance>libcamera/0</instance>
++        </interface>
++    </hal>
++</manifest>
+diff --git a/src/libcamera/ipa_manager.cpp b/src/libcamera/ipa_manager.cpp
+--- a/src/libcamera/ipa_manager.cpp
++++ b/src/libcamera/ipa_manager.cpp
+@@ -112,7 +112,9 @@
+ #if HAVE_IPA_PUBKEY
+ 	if (!pubKey_.isValid())
+ 		LOG(IPAManager, Warning) << "Public key not valid";
+-
++#endif
++
++#if HAVE_IPA_PUBKEY || defined(__ANDROID__)
+ 	forceIsolation_ = configuration.option<bool>({ "ipa", "force_isolation" })
+ 				       .value_or(false);
+ #endif
+@@ -288,14 +290,16 @@
+ 
+ bool IPAManager::isSignatureValid([[maybe_unused]] IPAModule *ipa) const
+ {
+-#if HAVE_IPA_PUBKEY
++#if HAVE_IPA_PUBKEY || defined(__ANDROID__)
+ 	if (forceIsolation_) {
+ 		LOG(IPAManager, Debug)
+ 			<< "Isolation of IPA module " << ipa->path()
+ 			<< " forced through configuration";
+ 		return false;
+ 	}
+-
++#endif
++
++#if HAVE_IPA_PUBKEY
+ 	File file{ ipa->path() };
+ 	if (!file.open(File::OpenModeFlag::ReadOnly))
+ 		return false;
+@@ -311,6 +315,12 @@
+ 		<< (valid ? "valid" : "not valid");
+ 
+ 	return valid;
++#elif defined(__ANDROID__)
++	/*
++	 * Android verifies this vendor APEX as a unit. Do not extend that trust
++	 * to modules discovered through environment or development paths.
++	 */
++	return ipa->path() == std::string(IPA_MODULE_DIR) + "/ipa_softisp.so";
+ #else
+ 	return false;
+ #endif

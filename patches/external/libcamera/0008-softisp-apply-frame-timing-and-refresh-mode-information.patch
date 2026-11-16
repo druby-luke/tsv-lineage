@@ -1,0 +1,379 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Sat, 14 Nov 2026 22:03:48 -0800
+Subject: [PATCH] softisp: apply frame timing and refresh configured sensor information
+
+Preserve frame-duration requests when moving from the old simple IPA to
+upstream's shared AGC. Rebase the timing correction from the previous
+ThinkSmart queue onto the new SoftISP configuration and session
+structures.
+
+Forward VBLANK and apply it before exposure. Restore native blanking on
+same-mode reopen, refresh the sensor's control range, and configure the
+IPA with current mode geometry and pixel timing rather than
+initialization-time values.
+
+Reserve the sensor's exposure margin, round frame length upwards and
+clamp it to physical VBLANK bounds. Report duration from the controls
+applied to the captured frame rather than echoing a request.
+
+Report exposure and analogue gain from those same captured-frame sensor
+controls, not from the AGC state prepared for another frame. Delayed
+sensor controls and changing frame-rate requests must not produce
+results that pair a planned exposure with an already-applied frame
+duration.
+
+Finalize the exposure/gain/VBLANK command together after processing
+statistics. Upstream prepares exposure from the previous automatic state
+but computes VBLANK from the new state; statistics are intentionally
+skipped on three out of four frames, and the generic no-statistics path
+otherwise resets VBLANK to the minimum. Neither path may combine a
+retained long exposure with a short frame. Use an opt-in shared AGC
+sensor-control preparation helper to retain coherent timing on skipped
+frames and to honor a lowered FPS-range maximum without reprocessing
+stale statistics. Other hardware IPA preparation paths remain unchanged.
+
+Exercise native-duration truncation, requested-frame-rate quantization,
+the physical frame-length maximum, skipped statistics and a reduced
+frame-duration budget in AGC regression tests. Do not carry over
+empirical stretchGain or maximum-frame-time tuning caps.
+
+Base-commit: df8e348d64b4932a0676256ed24f0da3ee9438bc
+Source: https://github.com/alessandro-fontana/android_external_libcamera/commit/20d7d37a4d7c88721f5604a5da4c9e461434ef38
+---
+diff --git a/include/libcamera/ipa/softisp.mojom b/include/libcamera/ipa/softisp.mojom
+--- a/include/libcamera/ipa/softisp.mojom
++++ b/include/libcamera/ipa/softisp.mojom
+@@ -9,6 +9,7 @@
+ import "include/libcamera/ipa/core.mojom";
+ 
+ struct IPAConfigInfo {
++	libcamera.IPACameraSensorInfo sensorInfo;
+ 	libcamera.ControlInfoMap sensorControls;
+ };
+ 
+diff --git a/src/ipa/libipa/agc.cpp b/src/ipa/libipa/agc.cpp
+--- a/src/ipa/libipa/agc.cpp
++++ b/src/ipa/libipa/agc.cpp
+@@ -402,6 +402,11 @@
+ 		v4l2VBlank.max().get<int32_t>() + config.sensorInfo.outputSize.height,
+ 		v4l2VBlank.def().get<int32_t>() + config.sensorInfo.outputSize.height,
+ 	};
++	session.sensor.minFrameLength = frameHeights[0];
++	session.sensor.maxFrameLength = frameHeights[1];
++	session.sensor.exposureMargin =
++		std::max<int64_t>(0, static_cast<int64_t>(frameHeights[0]) - maxExposure);
++	maxExposure = frameHeights[1] - session.sensor.exposureMargin;
+ 
+ 	std::array<int64_t, 3> frameDurations;
+ 	for (unsigned int i = 0; i < frameHeights.size(); ++i) {
+@@ -414,7 +419,6 @@
+ 	 * to know the limits for exposure time and analogue gain. As it depends
+ 	 * on the sensor, update it with the controls.
+ 	 *
+-	 * \todo take VBLANK into account for maximum exposure time
+ 	 */
+ 	session.minExposureTime = minExposure * session.lineDuration;
+ 	session.maxExposureTime = maxExposure * session.lineDuration;
+@@ -697,6 +701,34 @@
+ }
+ 
+ /**
++ * \brief Finalize a matching exposure, gain and frame duration for the sensor
++ * \param[in] session The session configuration
++ * \param[in,out] state The current active state
++ * \param[in,out] frameContext The frame context receiving the sensor controls
++ *
++ * Use the latest exposure state, including when statistics were skipped, and
++ * bound exposure by the requested frame-duration limit before deriving VBLANK.
++ */
++void AgcAlgorithm::prepareSensorControls(const agc::Session &session,
++					agc::ActiveState &state,
++					agc::FrameContext &frameContext)
++{
++	prepare(state, frameContext);
++
++	const utils::Duration margin = session.sensor.exposureMargin * session.lineDuration;
++	const utils::Duration maxExposureTime = std::clamp<utils::Duration>(
++		frameContext.maxFrameDuration - margin,
++		session.minExposureTime, session.maxExposureTime);
++	const uint32_t maxExposure = maxExposureTime / session.lineDuration;
++	frameContext.exposure = std::min(frameContext.exposure, maxExposure);
++
++	processFrameDuration(session, frameContext,
++			     std::max<utils::Duration>(
++				     frameContext.minFrameDuration,
++				     frameContext.exposure * session.lineDuration + margin));
++}
++
++/**
+  * \brief Process frame statistics
+  * \param[in] session The agc session configuration
+  * \param[in] state The agc active state
+@@ -746,9 +778,10 @@
+ 
+ 	if (frameContext.autoExposureEnabled) {
+ 		minExposureTime = session.minExposureTime;
+-		maxExposureTime = std::clamp(frameContext.maxFrameDuration,
+-					     session.minExposureTime,
+-					     session.maxExposureTime);
++		maxExposureTime = std::clamp<utils::Duration>(
++			frameContext.maxFrameDuration -
++				session.sensor.exposureMargin * lineDuration,
++			session.minExposureTime, session.maxExposureTime);
+ 	} else {
+ 		minExposureTime = lineDuration * frameContext.exposure;
+ 		maxExposureTime = minExposureTime;
+@@ -833,7 +866,9 @@
+ 	 * the minimum frame duration when we have short exposures.
+ 	 */
+ 	processFrameDuration(session, frameContext,
+-			     std::max(frameContext.minFrameDuration, newExposureTime));
++			     std::max<utils::Duration>(
++				     frameContext.minFrameDuration,
++				     newExposureTime + session.sensor.exposureMargin * lineDuration));
+ 
+ 	fillMetadata(session, frameContext, metadata);
+ }
+@@ -852,8 +887,10 @@
+ {
+ 	const utils::Duration &lineDuration = session.lineDuration;
+ 
+-	frameContext.vblank =
+-		(frameDuration / lineDuration) - session.sensor.outputSize.height;
++	const uint32_t frameLength = std::clamp<uint32_t>(
++		std::ceil(frameDuration / lineDuration),
++		session.sensor.minFrameLength, session.sensor.maxFrameLength);
++	frameContext.vblank = frameLength - session.sensor.outputSize.height;
+ 
+ 	/* Update frame duration accounting for line length quantization. */
+ 	frameContext.frameDuration =
+diff --git a/src/ipa/libipa/agc.h b/src/ipa/libipa/agc.h
+--- a/src/ipa/libipa/agc.h
++++ b/src/ipa/libipa/agc.h
+@@ -47,6 +47,9 @@
+ 
+ 	struct {
+ 		Size outputSize;
++		uint32_t minFrameLength;
++		uint32_t maxFrameLength;
++		uint32_t exposureMargin;
+ 	} sensor;
+ 
+ 	bool autoAllowed;
+@@ -148,6 +151,9 @@
+ 
+ 	void prepare(agc::ActiveState &state, agc::FrameContext &frameContext);
+ 
++	void prepareSensorControls(const agc::Session &session, agc::ActiveState &state,
++				   agc::FrameContext &frameContext);
++
+ 	void process(const agc::Session &session, agc::ActiveState &state,
+ 		     agc::FrameContext &frameContext, std::optional<ProcessParams> &&params,
+ 		     ControlList &metadata);
+diff --git a/src/ipa/softisp/algorithms/agc.cpp b/src/ipa/softisp/algorithms/agc.cpp
+--- a/src/ipa/softisp/algorithms/agc.cpp
++++ b/src/ipa/softisp/algorithms/agc.cpp
+@@ -103,6 +103,9 @@
+ 	} else {
+ 		agc_.process(context.configuration.agc, context.activeState.agc, frameContext.agc, {}, metadata);
+ 	}
++
++	agc_.prepareSensorControls(context.configuration.agc,
++				   context.activeState.agc, frameContext.agc);
+ }
+ 
+ REGISTER_IPA_ALGORITHM(Agc, "Agc")
+diff --git a/src/ipa/softisp/softisp.cpp b/src/ipa/softisp/softisp.cpp
+--- a/src/ipa/softisp/softisp.cpp
++++ b/src/ipa/softisp/softisp.cpp
+@@ -191,6 +191,7 @@
+ 
+ int IPASoftIsp::configure(const IPAConfigInfo &configInfo, ControlInfoMap *ipaControls)
+ {
++	context_.sensorInfo = configInfo.sensorInfo;
+ 	context_.sensorControls = configInfo.sensorControls;
+ 
+ 	/* Clear the IPA context before the streaming session. */
+@@ -251,9 +252,21 @@
+ 	ControlList metadata(controls::controls);
+ 	for (const auto &algo : algorithms())
+ 		algo->process(context_, frame, frameContext, stats_, metadata);
++	const utils::Duration exposureTime =
++		frameContext.sensor.exposure * context_.configuration.agc.lineDuration;
++	metadata.set(controls::ExposureTime, exposureTime.get<std::micro>());
++	metadata.set(controls::AnalogueGain, frameContext.sensor.gain);
++	if (sensorControls.contains(V4L2_CID_VBLANK)) {
++		const uint32_t frameLength = context_.sensorInfo.outputSize.height +
++			sensorControls.get(V4L2_CID_VBLANK).get<int32_t>();
++		const utils::Duration frameDuration =
++			frameLength * context_.configuration.agc.lineDuration;
++		metadata.set(controls::FrameDuration, frameDuration.get<std::micro>());
++	}
+ 	metadataReady.emit(frame, metadata);
+ 
+ 	ControlList ctrls(context_.sensorControls);
++	ctrls.set(V4L2_CID_VBLANK, static_cast<int32_t>(frameContext.agc.vblank));
+ 	agc::prepareControls(ctrls, context_.camHelper.get(),
+ 			     frameContext.agc.exposure, frameContext.agc.gain);
+ 	setSensorControls.emit(ctrls);
+diff --git a/src/libcamera/pipeline/simple/simple.cpp b/src/libcamera/pipeline/simple/simple.cpp
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -576,6 +576,8 @@
+ 		{ V4L2_CID_ANALOGUE_GAIN, { delays.gainDelay, false } },
+ 		{ V4L2_CID_EXPOSURE, { delays.exposureDelay, false } },
+ 	};
++	if (sensor_->controls().count(V4L2_CID_VBLANK))
++		params[V4L2_CID_VBLANK] = { delays.vblankDelay, true };
+ 	delayedCtrls_ = std::make_unique<DelayedControls>(sensor_->device(), params);
+ 
+ 	LOG(SimplePipeline, Debug)
+@@ -1666,7 +1668,21 @@
+ 	if (data->converter_) {
+ 		return data->converter_->configure(inputCfg, outputCfgs);
+ 	} else {
++		const auto vblank = data->sensor_->controls().find(V4L2_CID_VBLANK);
++		if (vblank != data->sensor_->controls().end()) {
++			/* Restore the native exposure range on same-mode reopen. */
++			ControlList ctrls(data->sensor_->controls());
++			ctrls.set(V4L2_CID_VBLANK, vblank->second.min().get<int32_t>());
++			ret = data->sensor_->setControls(&ctrls);
++			if (ret)
++				return ret;
++			data->sensor_->device()->updateControlInfo();
++		}
++
+ 		ipa::softisp::IPAConfigInfo configInfo;
++		ret = data->sensor_->sensorInfo(&configInfo.sensorInfo);
++		if (ret)
++			return ret;
+ 		configInfo.sensorControls = data->sensor_->controls();
+ 		return data->swIsp_->configure(inputCfg, outputCfgs, configInfo, &data->controlInfo_);
+ 	}
+diff --git a/test/ipa/libipa/agc_frame_duration.cpp b/test/ipa/libipa/agc_frame_duration.cpp
+new file mode 100644
+--- /dev/null
++++ b/test/ipa/libipa/agc_frame_duration.cpp
+@@ -0,0 +1,110 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++
++#include "agc.h"
++
++#include <array>
++#include <chrono>
++#include <iostream>
++#include <optional>
++
++#include <libcamera/control_ids.h>
++#include <libcamera/controls.h>
++
++#include "test.h"
++
++using namespace libcamera;
++using namespace std::chrono_literals;
++
++class AgcFrameDurationTest : public Test
++{
++protected:
++	int run() override
++	{
++		ipa::AgcAlgorithm algorithm;
++		ipa::agc::Session session{};
++		session.lineDuration = 2760 * 1.0s / 200000000;
++		session.sensor.outputSize = { 1936, 1096 };
++		session.sensor.minFrameLength = 1166;
++		session.sensor.maxFrameLength = 65535;
++
++		struct Case {
++			utils::Duration requested;
++			uint32_t expectedFrameLength;
++			int64_t expectedDuration;
++		};
++		const std::array<Case, 3> cases{ {
++			/* Metadata truncation must not produce VBLANK below its minimum. */
++			{ 16090us, 1166, 16090 },
++			/* Round up to avoid exceeding the requested frame rate. */
++			{ 33333us, 2416, 33340 },
++			{ 10s, 65535, 904383 },
++		} };
++
++		for (const Case &test : cases) {
++			ipa::agc::ActiveState state{};
++			ipa::agc::FrameContext frame{};
++			frame.minFrameDuration = test.requested;
++			ControlList metadata(controls::controls);
++			algorithm.process(session, state, frame, std::nullopt, metadata);
++
++			if (frame.vblank + session.sensor.outputSize.height !=
++			    test.expectedFrameLength) {
++				std::cerr << "Unexpected frame length for "
++					  << test.requested << std::endl;
++				return TestFail;
++			}
++
++			const auto duration = metadata.get(controls::FrameDuration);
++			if (!duration || *duration != test.expectedDuration) {
++				std::cerr << "Frame duration metadata differs from sensor timing"
++					  << std::endl;
++				return TestFail;
++			}
++		}
++
++		session.sensor.exposureMargin = 8;
++		session.minExposureTime = session.lineDuration;
++		session.maxExposureTime =
++			(session.sensor.maxFrameLength - session.sensor.exposureMargin) *
++			session.lineDuration;
++
++		for (utils::Duration maximum : { utils::Duration(900ms), utils::Duration(33333us) }) {
++			ipa::agc::ActiveState state{};
++			state.automatic.exposure = 60000;
++			state.automatic.gain = 2.0;
++			ipa::agc::FrameContext frame{};
++			frame.autoExposureEnabled = true;
++			frame.autoGainEnabled = true;
++			frame.exposure = state.automatic.exposure;
++			frame.minFrameDuration = 33333us;
++			frame.maxFrameDuration = maximum;
++			ControlList metadata(controls::controls);
++
++			algorithm.process(session, state, frame, std::nullopt, metadata);
++			algorithm.prepareSensorControls(session, state, frame);
++
++			const uint32_t frameLength =
++				session.sensor.outputSize.height + frame.vblank;
++			if (frame.exposure + session.sensor.exposureMargin > frameLength ||
++			    frame.frameDuration < frame.minFrameDuration ||
++			    frame.frameDuration > maximum + session.lineDuration) {
++				std::cerr << "Skipped statistics produced inconsistent sensor timing"
++					  << std::endl;
++				return TestFail;
++			}
++
++			if ((maximum == utils::Duration(900ms) &&
++			     frame.exposure != state.automatic.exposure) ||
++			    (maximum == utils::Duration(33333us) &&
++			     frame.exposure >= state.automatic.exposure)) {
++				std::cerr << "Exposure was not retained or bounded for the current FPS range"
++					  << std::endl;
++				return TestFail;
++			}
++		}
++
++		return TestPass;
++	}
++};
++
++TEST_REGISTER(AgcFrameDurationTest)
+diff --git a/test/ipa/libipa/meson.build b/test/ipa/libipa/meson.build
+--- a/test/ipa/libipa/meson.build
++++ b/test/ipa/libipa/meson.build
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: CC0-1.0
+ 
+ libipa_test = [
++    {'name': 'agc_frame_duration', 'sources': ['agc_frame_duration.cpp']},
+     {'name': 'fixedpoint', 'sources': ['fixedpoint.cpp']},
+     {'name': 'histogram', 'sources': ['histogram.cpp']},
+     {'name': 'interpolator', 'sources': ['interpolator.cpp']},

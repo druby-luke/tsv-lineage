@@ -1,0 +1,3959 @@
+From adbb8d664ce2dce8180bda63771bd089aee24a3d Mon Sep 17 00:00:00 2001
+From: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+Date: Fri, 17 Jan 2025 14:53:10 +0100
+Subject: [PATCH] android: hal: Add AIDL camera HAL
+
+This is a combination of 31 commits.
+
+android: hal: provider: Import legacy provider 2.4 HAL from AOSP
+
+AOSP does not ship an up-to-date (libhardware) camera provider HAL.
+
+In order to write an AIDL HAL compatible with libcamera, we need
+some reference codebase to start from.
+
+Import the 2.4 legacy HAL from AOSP from tag android-15.0.0_r12.
+Folder path: //hardware/interfaces/camera/provider/2.4/default/
+commit ad2ba1b851b6 ("[DON'T BLOCK] Test ownership migration rules")
+
+Note: only the "legacy" part has been imported since external cameras are
+supported via android.hardware.camera.provider-V1-external-service.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: device: Import helpers from camera.device-external-impl
+
+The ExternalCameraDevice AIDL HAL provides some convience functions to
+convert between libhardware structures and AIDL classes.
+It also provides a wrapper to convert common::Status to ScopedAStatus.
+
+We need those convience functions for our HAL implementation as well.
+
+Since they are not in a separate library, we can't simply link against it.
+
+Make a local copy for our own usage here.
+
+Import from android-15.0.0_r12 tag
+Folder path: //hardware/interfaces/camera/device/default/
+commit ad2ba1b851b6 ("[DON'T BLOCK] Test ownership migration rules")
+
+Note: this only imports the conversion code.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: device: Rename device-external-impl -> device-libcamera-impl
+
+For now camera.device-libcamera-impl only supports conversion functions.
+
+This is already useful for the provider implementation in order to
+convert from common::Status to AScopedStatus.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: Use Android-Apache-2.0 instead of hardware_interfaces_license
+
+hardware_interfaces_license is only available for projects in:
+//hardware/interfaces//
+
+Since our HAL is not located in that folder, we cannot use it.
+
+  variant "android_common": depends on
+  //hardware/interfaces:hardware_interfaces_license which is
+  not visible to this module
+
+Switch to Android-Apache-2.0 which is the same license and is
+available in all Android projects.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: provider: Remove 32-bits build targets
+
+Recent Android versions (with kernel version 6.2+) require 64-bits userspace.
+
+Therefore, there is no point in keeping unused 32-bits build targets.
+Remove them.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: provider: Rename 2.4 -> 2.5 to prepare HIDL update
+
+The most recent libbhardware (legacy) based camera provider HAL in AOSP
+is the 2.5 version located in //hardware/interfaces/camera/provider/2.5/default/
+LegacyCameraProviderImpl_2_5 is implemented as a subclass of
+LegacyCameraProviderImpl_2_4.
+
+We don't want this subclassing to be done because it makes converting to AIDL
+more difficult.
+Instead, we want the new 2.5 function (notifyDeviceStateChange()) to
+be part of our class.
+
+In order to prepare for importing the 2.5 codebase, rename all mentions
+from 2.4 -> 2.5.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: provider: Import HIDL v2.5 provider HAL from AOSP
+
+The most recent libbhardware (legacy) based camera provider HAL in AOSP
+is the 2.5 version located in //hardware/interfaces/camera/provider/2.5/default/
+LegacyCameraProviderImpl_2_5 is implemented as a subclass of
+LegacyCameraProviderImpl_2_4.
+
+We don't want tho subclass because it makes converting to AIDL more difficult.
+Instead, we want the new 2.5 function (notifyDeviceStateChange()) to
+be part of our class.
+
+Import the 2.5 code from tag android-15.0.0_r12.
+Folder path: //hardware/interfaces/camera/provider/2.5/default/
+commit ad2ba1b851b6 ("[DON'T BLOCK] Test ownership migration rules")
+
+This:
+- Removes the '-impl' library (it's a template-based header only)
+- Add notifyDeviceStateChange() method
+- Update copyright notice
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: provider: Remove templated CameraProvider struct
+
+CameraProvider is implemented as a wrapper structure in order to
+be backwards compatible with various HIDL versions.
+
+Since this code is about to get upgraded to AIDL, we don't care about the
+deprecated HIDL support.
+
+Remove the HIDL interface layer and make LegacyCameraProviderImpl
+implement the ICameraProvider interface.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: provider: Rename legacy -> libcamera
+
+This provider HAL is libcamera specific. As a first step we will still rely on
+libhardware as interface, but that can get plumbed in future reworks.
+
+Rename from "legacy" to "libcamera" to make it clear that this provider HAL is
+for supporting cameras using libcamera.
+
+While at it, also update the LOG_TAGs to match the new naming.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: provider: Send libcamera logs to logcat
+
+By default libcamera logs only warnings and errors to stdout.
+
+Use LIBCAMERA_LOG_LEVELS and LIBCAMERA_LOG_FILE to ensure
+that libcamera logs info+ logs are send to logcat.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: provider: Remove V2_5 namespace to prepare for AIDL
+
+Most AIDL HALs don't use the AIDL version inside the C++ namespace.
+Follow that practice and remove it here as well.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: provider: Don't hard-code the hwbinder thread count
+
+Following example from //hardware/interfaces/camera/provider/default,
+use a constant instead of hard-coding the thread count.
+
+This will simplify AIDL migration to match what is done for the
+ExternalCameraProvider.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: provider: Don't use intermediate variable for LAZY_SERVICE
+
+The intermediate bool variable is not needed since we can use the pre-processor
+for this.
+
+Remove it as done in ExternalCameraProvider.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: device: Add a stub implementation for provider
+
+In order to implement the provider HAL in AIDL, we need to
+instantiate a ICameraDevice.
+A ICameraDevice implementation must inherit from BnCameraDevice.
+
+Add a minimal stub, named LibcameraDevice which builds.
+This can be used by the provider HAL in getCameraDeviceInterface().
+
+Note that we no longer depend on hidl_defaults so get rid of that as well.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: provider: Migrate from v3.5 HIDL to AIDL v1
+
+This migrates the provider HAL from HIDL into AIDL.
+
+This includes the following changes:
+- Replace use std::string instead of hidl_string
+- Use CameraDeviceStatus enum instead of CAMERA_DEVICE_STATUS
+- Use std::shared_ptr<> instead of android::sp<>
+- Use method argument naming from ExternalCameraProvider
+- Return ndk::ScopedAStatus instead of camera::common::Status
+- Remove support of vendor tags as it's un-implemented in libcamera
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: device: Implement BnCameraDevice interface
+
+Implement all required operations of a BnCameraDevice with the exception
+for session handling.
+
+Session being a quite complex topic, it will be enabled after the
+LibcameraDeviceSession class is implemented.
+
+This is based on the both the legacy 3.2 HIDL HAL and
+the External AIDL located in:
+
+//hardware/interfaces/camera/device/3.2/default/CameraDevice
+//hardware/interfaces/camera/device/default/ExternalCameraDevice
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: session: Import legacy 3.2 CameraDeviceSession from AOSP
+
+In order to write an AIDL HAL compatible with libcamera, we need
+some reference codebase to start from.
+
+Import the 3.2 legacy HAL from AOSP from tag android-15.0.0_r12.
+Folder path: //hardware/interfaces/camera/device/3.2/default/
+commit ad2ba1b851b6 ("[DON'T BLOCK] Test ownership migration rules")
+
+Note: only the "legacy" part has been imported since external cameras are
+supported via android.hardware.camera.provider-V1-external-service.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: session: rename CameraDeviceSession -> LibcameraDeviceSession
+
+This is going to be libcamera specific, so rename it accordingly.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: session: Remove V3_2 namespace to prepare for AIDL
+
+Most AIDL HALs don't use the AIDL version inside the C++ namespace.
+Follow that practice and remove it here as well.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: session: Remove HIDL trampoline code to prepare for AIDL
+
+We don't need this, as it's HIDL specific.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: session: Migrate from v3.2 HIDL to AIDL v1
+
+This migrates the DeviceSession class from HIDL into AIDL.
+
+This includes the following changes:
+- Use std::shared_ptr<> instead of android::sp<>
+- Use std::string instead of hidl_string
+- Use std::vector instead of hidl_vec
+- Remove V1_0 namespace for camera::common::helper
+- Use HandleImporter from camera::common::helper
+- Use AIDLMessageQueues and change data type from uint8_t -> int8_t
+- Use makeFromAidl() for fence handling
+- Use std::move() instead of hand-cloning fences
+- Use new NotifyMsg API with class enums
+- Use NativeHandle instead off native_handle_t* when needed
+
+Note: by switching to dupToAidl(), we must ensure that the original handle
+is deleted.
+
+Note: All AIDL specific operations are stubbed for now, as we are not sure that
+those are implemented by libcamera's hw_module.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: device: Use LibcameraDeviceSession class
+
+Now that LibcameraDeviceSession is implemented, we can use it in
+LibcameraDevice.
+
+With this change, we can see preview using com.android.camera2 app and
+take pictures via libcamera.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: Rename outdated LOG_TAGs
+
+These were leftovers from the code import from AOSP.
+
+Update to use the new naming scheme so that it's easier to grep
+for this HAL in logcat.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: Remove un-needed dependencies
+
+While converting to AIDL, we failed to remove the HIDL
+dependencies.
+
+Cleanup the dependencies and also depend on common-helper instead of
+the deprecated common@1.0-helper.
+
+Note that for device, we cannot get rid of libhidlbase because of our
+usage of HandleImporter.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: Remove lazy service support
+
+We have never used the lazy implementation and don't even know how
+to test it.
+
+To simplify the codebase, get rid of it.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: provider: add libcamera_aidl_defaults
+
+Add a new libcamera_aidl_defaults which is used by the
+camera library.
+
+This allows us to remove lots of duplicated shared_libs since
+they are defined in the new defaults.
+
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: provider: Return ILLEGAL_ARGUMENT when callback is nullptr
+
+When a user attempts to setCallback() using a nullptr, we should
+return ILLEGAL_ARGUMENT, not OK.
+
+Update the condition and while at it, drop the braces which are
+not needed for a single statement.
+
+Not: this is tested by VTS.
+
+Test: atest PerInstance/CameraAidlTest#setCallback/1_android_hardware_camera_provider_ICameraProvider_libcamera_0
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: device: Fix openInjectSession() return code
+
+The AIDL doc states that we should return OPERATION_NOT_SUPPORTED when
+this is not implemented.
+
+Fix the return code. This is tested with VTS.
+
+Test: atest PerInstance/CameraAidlTest#configureInjectionStreamsAvailableOutputs/1_android_hardware_camera_provider_ICameraProvider_libcamera_0
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: device: Fix torch related return codes
+
+When these operations are not supported, we should return
+OPERATION_NOT_SUPPORTED instead of ILLEGAL_ARGUMENT.
+
+Fix both return codes.
+
+This is tested by VTS.
+
+Test: atest PerInstance/CameraAidlTest#turnOnTorchWithStrengthLevel/1_android_hardware_camera_provider_ICameraProvider_libcamera_0
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: device: Return ILLEGAL_ARGUMENT on invalid output buffer
+
+When we are importing an invalid output buffer, we should return
+ILLEGAL_ARGUMENT, not INTERNAL_ERROR.
+
+Fix this.
+
+This is tested by VTS.
+
+Test: atest PerInstance/CameraAidlTest#processCaptureRequestInvalidBuffer/1_android_hardware_camera_provider_ICameraProvider_libcamera_0
+Signed-off-by: Mattijs Korpershoek <mkorpershoek@baylibre.com>
+
+android: hal: Cleanup makefiles
+---
+ src/android/hal/device/Android.bp             |   47 +
+ src/android/hal/device/LibcameraDevice.cpp    |  303 +++
+ src/android/hal/device/LibcameraDevice.h      |  106 ++
+ .../hal/device/LibcameraDeviceSession.cpp     | 1668 +++++++++++++++++
+ .../hal/device/LibcameraDeviceSession.h       |  381 ++++
+ src/android/hal/device/convert.cpp            |  169 ++
+ src/android/hal/device/convert.h              |   81 +
+ src/android/hal/provider/Android.bp           |   55 +
+ .../hal/provider/LibcameraProvider.cpp        |  490 +++++
+ src/android/hal/provider/LibcameraProvider.h  |  130 ++
+ ...re.camera.provider-V1-libcamera-service.rc |   10 +
+ src/android/hal/provider/service.cpp          |   45 +
+ 12 files changed, 3485 insertions(+)
+ create mode 100644 src/android/hal/device/Android.bp
+ create mode 100644 src/android/hal/device/LibcameraDevice.cpp
+ create mode 100644 src/android/hal/device/LibcameraDevice.h
+ create mode 100644 src/android/hal/device/LibcameraDeviceSession.cpp
+ create mode 100644 src/android/hal/device/LibcameraDeviceSession.h
+ create mode 100644 src/android/hal/device/convert.cpp
+ create mode 100644 src/android/hal/device/convert.h
+ create mode 100644 src/android/hal/provider/Android.bp
+ create mode 100644 src/android/hal/provider/LibcameraProvider.cpp
+ create mode 100644 src/android/hal/provider/LibcameraProvider.h
+ create mode 100644 src/android/hal/provider/android.hardware.camera.provider-V1-libcamera-service.rc
+ create mode 100644 src/android/hal/provider/service.cpp
+
+diff --git a/src/android/hal/device/Android.bp b/src/android/hal/device/Android.bp
+new file mode 100644
+index 000000000..48799a41d
+--- /dev/null
++++ b/src/android/hal/device/Android.bp
+@@ -0,0 +1,47 @@
++//
++// Copyright (C) 2020 The Android Open Source Project
++//
++// SPDX-License-Identifier: Apache-2.0
++//
++
++package {
++    default_team: "trendy_team_camera_framework",
++    // See: http://go/android-license-faq
++    // A large-scale-change added 'default_applicable_licenses' to import
++    // all of the 'license_kinds' from "hardware_interfaces_license"
++    // to get the below license kinds:
++    //   SPDX-license-identifier-Apache-2.0
++    default_applicable_licenses: ["Android-Apache-2.0"],
++}
++
++cc_library_shared {
++    name: "camera.device-libcamera-impl",
++    vendor: true,
++    srcs: [
++        "LibcameraDevice.cpp",
++        "LibcameraDeviceSession.cpp",
++        "convert.cpp",
++    ],
++    shared_libs: [
++        "android.hardware.camera.common-V1-ndk",
++        "android.hardware.camera.device-V1-ndk",
++        "android.hardware.graphics.allocator-V2-ndk",
++        "libbinder_ndk",
++        "libcamera_metadata",
++        "libcutils",
++        "libfmq",
++        "libhardware",
++        "libhidlbase",
++        "liblog",
++        "libsync",
++        "libui",
++        "libutils",
++    ],
++    static_libs: [
++        "android.hardware.camera.common-helper",
++        "libaidlcommonsupport",
++    ],
++    header_libs: ["media_plugin_headers"],
++    export_include_dirs: ["."],
++    defaults: ["android.hardware.graphics.common-ndk_shared"],
++}
+diff --git a/src/android/hal/device/LibcameraDevice.cpp b/src/android/hal/device/LibcameraDevice.cpp
+new file mode 100644
+index 000000000..c617396db
+--- /dev/null
++++ b/src/android/hal/device/LibcameraDevice.cpp
+@@ -0,0 +1,303 @@
++/*
++ * Copyright (C) 2025 BayLibre SAS
++ * Author: Mattijs Korpershoek <mkorpershoek@baylibre.com>
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#define LOG_TAG "LibcameraDevice"
++// #define LOG_NDEBUG 0
++#include <log/log.h>
++#include <utils/Trace.h>
++
++#include "LibcameraDevice.h"
++#include "LibcameraDeviceSession.h"
++#include "convert.h"
++
++#include <aidl/android/hardware/camera/common/Status.h>
++#include <regex>
++#include <set>
++
++namespace android {
++namespace hardware {
++namespace camera {
++namespace device {
++namespace implementation {
++
++using ::aidl::android::hardware::camera::common::Status;
++using ::android::hardware::camera::device::implementation::fromStatus;
++
++LibcameraDevice::LibcameraDevice(
++        sp<CameraModule> module, const std::string& cameraId,
++        const SortedVector<std::pair<std::string, std::string>>& cameraDeviceNames)
++    : mModule(module), mCameraId(cameraId) {
++    mCameraIdInt = atoi(mCameraId.c_str());
++    // Should not reach here as provider also validate ID
++    if (mCameraIdInt < 0) {
++        ALOGE("%s: Invalid camera id: %s", __FUNCTION__, mCameraId.c_str());
++        mInitFail = true;
++    } else if (mCameraIdInt >= mModule->getNumberOfCameras()) {
++        ALOGI("%s: Adding a new camera id: %s", __FUNCTION__, mCameraId.c_str());
++    }
++
++    mDeviceVersion = mModule->getDeviceVersion(mCameraIdInt);
++    if (mDeviceVersion < CAMERA_DEVICE_API_VERSION_3_2) {
++        ALOGE("%s: Camera id %s does not support HAL3.2+",
++                __FUNCTION__, mCameraId.c_str());
++        mInitFail = true;
++    }
++}
++
++LibcameraDevice::~LibcameraDevice() = default;
++
++Status LibcameraDevice::initStatus() const {
++    Mutex::Autolock _l(mLock);
++    Status status = Status::OK;
++    if (mInitFail) {
++        status = Status::INTERNAL_ERROR;
++    }
++    return status;
++}
++
++ndk::ScopedAStatus LibcameraDevice::getCameraCharacteristics(CameraMetadata* _aidl_return) {
++    if (_aidl_return == nullptr)
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++
++    Status status = initStatus();
++    if (status != Status::OK) {
++        ALOGE("%s: Invalid device status: %s", __FUNCTION__, toString(status).c_str());
++        _aidl_return = nullptr;
++        return fromStatus(status);
++    }
++
++    struct camera_info info;
++    int ret = mModule->getCameraInfo(mCameraIdInt, &info);
++    if (ret != OK) {
++        ALOGE("%s: Could not retrieve camera info: %d", __FUNCTION__, ret);
++        return fromStatus(getAidlStatus(ret));
++    }
++    convertToAidl(info.static_camera_characteristics, _aidl_return);
++    return fromStatus(Status::OK);
++}
++
++ndk::ScopedAStatus LibcameraDevice::getPhysicalCameraCharacteristics(const std::string& in_physicalCameraId,
++                                                                     CameraMetadata* _aidl_return) {
++    Status status = initStatus();
++    if (status != Status::OK) {
++        ALOGE("%s: Invalid device status: %s", __FUNCTION__, toString(status).c_str());
++        _aidl_return = nullptr;
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++    }
++
++    // Require module 2.5+ version.
++    if (mModule->getModuleApiVersion() < CAMERA_MODULE_API_VERSION_2_5) {
++        ALOGE("%s: get_physical_camera_info() must be called "
++              "on camera module 2.5 or newer", __FUNCTION__);
++        _aidl_return = nullptr;
++        return fromStatus(Status::INTERNAL_ERROR);
++    }
++
++    int id = atoi(in_physicalCameraId.c_str());
++    camera_metadata_t* physicalInfo = nullptr;
++    int ret = mModule->getPhysicalCameraInfo(id, &physicalInfo);
++    if (ret != OK) {
++        ALOGE("%s: Could not retrieve physical camera info: %d", __FUNCTION__, ret);
++        _aidl_return = nullptr;
++        return fromStatus(getAidlStatus(ret));
++    }
++
++    convertToAidl(physicalInfo, _aidl_return);
++    return fromStatus(Status::OK);
++}
++
++ndk::ScopedAStatus LibcameraDevice::getResourceCost(CameraResourceCost* _aidl_return) {
++    if (_aidl_return == nullptr)
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++
++    struct camera_info info;
++    int ret = mModule->getCameraInfo(mCameraIdInt, &info);
++    if (ret != OK) {
++        ALOGE("%s: Could not retrieve camera info: %d", __FUNCTION__, ret);
++        return fromStatus(getAidlStatus(ret));
++    }
++
++    _aidl_return->resourceCost = info.resource_cost;
++    return fromStatus(Status::OK);
++}
++
++ndk::ScopedAStatus LibcameraDevice::isStreamCombinationSupported(const StreamConfiguration& in_streams,
++                                                                 bool* _aidl_return) {
++    // Require module 2.5+ version.
++    if (mModule->getModuleApiVersion() < CAMERA_MODULE_API_VERSION_2_5) {
++        ALOGE("%s: is_stream_combination_supported() must be called "
++              "on camera module 2.5 or newer", __FUNCTION__);
++        _aidl_return = nullptr;
++        return fromStatus(Status::INTERNAL_ERROR);
++    }
++
++    camera_stream_combination_t streamComb{};
++    streamComb.operation_mode = static_cast<uint32_t> (in_streams.operationMode);
++    streamComb.num_streams = in_streams.streams.size();
++    camera_stream_t *streamBuffer  = new camera_stream_t[streamComb.num_streams];
++
++    size_t i = 0;
++    for (const auto &it : in_streams.streams) {
++        convertFromAidl(it, &streamBuffer[i]);
++        i++;
++    }
++    streamComb.streams = streamBuffer;
++    auto res = mModule->isStreamCombinationSupported(mCameraIdInt, &streamComb);
++    Status status;
++    switch (res) {
++        case NO_ERROR:
++            *_aidl_return = true;
++            status = Status::OK;
++            break;
++        case BAD_VALUE:
++            status = Status::OK;
++            *_aidl_return = false;
++            break;
++        case INVALID_OPERATION:
++            status = Status::OPERATION_NOT_SUPPORTED;
++            *_aidl_return = false;
++            break;
++        default:
++            ALOGE("%s: Unexpected error: %d", __FUNCTION__, res);
++            status = Status::INTERNAL_ERROR;
++            _aidl_return = nullptr;
++    };
++    delete [] streamBuffer;
++
++    return fromStatus(status);
++}
++
++ndk::ScopedAStatus LibcameraDevice::open(const std::shared_ptr<ICameraDeviceCallback>& in_callback,
++                                         std::shared_ptr<ICameraDeviceSession>* _aidl_return) {
++    if (in_callback == nullptr) {
++        ALOGE("%s: Cannot open camera, callback is null", __FUNCTION__);
++        _aidl_return = nullptr;
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++    }
++
++    Status status = initStatus();
++    if (status != Status::OK) {
++        // Provider will never pass initFailed device to client, so
++        // this must be a disconnected camera
++        ALOGE("%s: Cannot open camera. camera is disconnected", __FUNCTION__);
++        _aidl_return = nullptr;
++        return fromStatus(Status::CAMERA_DISCONNECTED);
++    }
++
++    Mutex::Autolock _l(mLock);
++    if (mSession != nullptr && !mSession->isClosed()) {
++        ALOGE("%s: cannot open an already opened camera!", __FUNCTION__);
++        _aidl_return = nullptr;
++        return fromStatus(Status::CAMERA_IN_USE);
++    }
++
++    /** Open HAL device */
++    status_t res;
++    camera3_device_t *device;
++
++    ATRACE_BEGIN("camera3->open");
++    res = mModule->open(mCameraId.c_str(), reinterpret_cast<hw_device_t**>(&device));
++    ATRACE_END();
++    if (res != OK) {
++        ALOGE("%s: Cannot open camera %s: %d", __FUNCTION__, mCameraId.c_str(), res);
++        _aidl_return = nullptr;
++        return fromStatus(getAidlStatus(res));
++    }
++
++    /** Cross-check device version */
++    if (device->common.version < CAMERA_DEVICE_API_VERSION_3_2) {
++        ALOGE("%s: Could not open camera: "
++                "Camera device should be at least %x, reports %x instead",
++                __FUNCTION__,
++                CAMERA_DEVICE_API_VERSION_3_2,
++                device->common.version);
++        device->common.close(&device->common);
++        _aidl_return = nullptr;
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++    }
++
++    struct camera_info info;
++    res = mModule->getCameraInfo(mCameraIdInt, &info);
++    if (res != OK) {
++        ALOGE("%s: Could not open camera: getCameraInfo failed");
++        device->common.close(&device->common);
++        _aidl_return = nullptr;
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++    }
++
++    std::shared_ptr<LibcameraDeviceSession> session;
++    session = createSession(device, info.static_camera_characteristics, in_callback);
++    if (session == nullptr) {
++        ALOGE("%s: camera device session allocation failed", __FUNCTION__);
++        mLock.unlock();
++        _aidl_return = nullptr;
++        return fromStatus(Status::INTERNAL_ERROR);
++    }
++    if (session->isInitFailed()) {
++        ALOGE("%s: camera device session init failed", __FUNCTION__);
++        session = nullptr;
++        mLock.unlock();
++        _aidl_return = nullptr;
++        return fromStatus(Status::INTERNAL_ERROR);
++    }
++    mSession = session;
++
++    *_aidl_return = session;
++    return fromStatus(Status::OK);
++}
++ndk::ScopedAStatus LibcameraDevice::openInjectionSession(
++        const std::shared_ptr<ICameraDeviceCallback>& in_callback,
++        std::shared_ptr<ICameraInjectionSession>* _aidl_return) {
++    _aidl_return = nullptr;
++    return fromStatus(Status::OPERATION_NOT_SUPPORTED);
++}
++
++ndk::ScopedAStatus LibcameraDevice::setTorchMode(bool in_on) {
++    if (!mModule->isSetTorchModeSupported())
++        return fromStatus(Status::OPERATION_NOT_SUPPORTED);
++
++    Status status = initStatus();
++    if (status == Status::OK) {
++        status = getAidlStatus(mModule->setTorchMode(mCameraId.c_str(), in_on));
++    }
++
++    return fromStatus(status);
++}
++
++ndk::ScopedAStatus LibcameraDevice::turnOnTorchWithStrengthLevel(int32_t in_torchStrength) {
++    // not supported by hardware module
++    return fromStatus(Status::OPERATION_NOT_SUPPORTED);
++}
++
++ndk::ScopedAStatus LibcameraDevice::getTorchStrengthLevel(int32_t* _aidl_return) {
++    // not supported by hardware module
++    _aidl_return = nullptr;
++    return fromStatus(Status::OPERATION_NOT_SUPPORTED);
++}
++
++std::shared_ptr<LibcameraDeviceSession> LibcameraDevice::createSession(
++            camera3_device_t* device,
++            const camera_metadata_t* deviceInfo,
++            const std::shared_ptr<ICameraDeviceCallback>& cb) {
++    return ndk::SharedRefBase::make<LibcameraDeviceSession>(device, deviceInfo, cb);
++}
++
++}  // namespace implementation
++}  // namespace device
++}  // namespace camera
++}  // namespace hardware
++}  // namespace android
+diff --git a/src/android/hal/device/LibcameraDevice.h b/src/android/hal/device/LibcameraDevice.h
+new file mode 100644
+index 000000000..a1982b96d
+--- /dev/null
++++ b/src/android/hal/device/LibcameraDevice.h
+@@ -0,0 +1,106 @@
++/*
++ * Copyright (C) 2025 BayLibre SAS
++ * Author: Mattijs Korpershoek <mkorpershoek@baylibre.com>
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#pragma once
++
++#include <aidl/android/hardware/camera/common/Status.h>
++#include <aidl/android/hardware/camera/device/BnCameraDevice.h>
++
++#include <CameraModule.h>
++
++#include "LibcameraDeviceSession.h"
++
++#include <map>
++#include <memory>
++#include <unordered_map>
++#include <unordered_set>
++
++namespace android {
++namespace hardware {
++namespace camera {
++namespace device {
++namespace implementation {
++
++using ::aidl::android::hardware::camera::common::CameraResourceCost;
++using ::aidl::android::hardware::camera::common::Status;
++using ::aidl::android::hardware::camera::device::BnCameraDevice;
++using ::aidl::android::hardware::camera::device::CameraMetadata;
++using ::aidl::android::hardware::camera::device::ICameraDeviceCallback;
++using ::aidl::android::hardware::camera::device::ICameraDeviceSession;
++using ::aidl::android::hardware::camera::device::ICameraInjectionSession;
++using ::aidl::android::hardware::camera::device::StreamConfiguration;
++
++using ::android::hardware::camera::common::helper::CameraModule;
++
++using ::android::sp;
++
++class LibcameraDevice : public BnCameraDevice {
++public:
++    // Called by provider HAL.
++    // Provider HAL must ensure the uniqueness of CameraDevice object per cameraId, or there could
++    // be multiple CameraDevice trying to access the same physical camera.  Also, provider will have
++    // to keep track of all CameraDevice objects in order to notify CameraDevice when the underlying
++    // camera is detached.
++    LibcameraDevice(sp<CameraModule> module,
++                 const std::string& cameraId,
++                 const SortedVector<std::pair<std::string, std::string>>& cameraDeviceNames);
++    virtual ~LibcameraDevice();
++
++    ndk::ScopedAStatus getCameraCharacteristics(CameraMetadata* _aidl_return) override;
++    ndk::ScopedAStatus getPhysicalCameraCharacteristics(const std::string& in_physicalCameraId,
++                                                        CameraMetadata* _aidl_return) override;
++    ndk::ScopedAStatus getResourceCost(CameraResourceCost* _aidl_return) override;
++    ndk::ScopedAStatus isStreamCombinationSupported(const StreamConfiguration& in_streams,
++                                                    bool* _aidl_return) override;
++    ndk::ScopedAStatus open(const std::shared_ptr<ICameraDeviceCallback>& in_callback,
++                            std::shared_ptr<ICameraDeviceSession>* _aidl_return) override;
++    ndk::ScopedAStatus openInjectionSession(
++            const std::shared_ptr<ICameraDeviceCallback>& in_callback,
++            std::shared_ptr<ICameraInjectionSession>* _aidl_return) override;
++    ndk::ScopedAStatus setTorchMode(bool in_on) override;
++    ndk::ScopedAStatus turnOnTorchWithStrengthLevel(int32_t in_torchStrength) override;
++    ndk::ScopedAStatus getTorchStrengthLevel(int32_t* _aidl_return) override;
++
++    // Caller must use this method to check if CameraDevice ctor failed
++    bool isInitFailed() { return mInitFail; }
++
++private:
++    sp<CameraModule> mModule;
++    std::string mCameraId;
++    // const after ctor
++    int mCameraIdInt;
++    int mDeviceVersion;
++    bool mInitFail = false;
++
++    // gating access to mSession
++    mutable Mutex mLock;
++
++    Status initStatus() const;
++
++    std::shared_ptr<LibcameraDeviceSession> mSession = nullptr;
++
++    virtual std::shared_ptr<LibcameraDeviceSession> createSession(
++            camera3_device_t* device,
++            const camera_metadata_t* deviceInfo,
++            const std::shared_ptr<ICameraDeviceCallback>& cb);
++};
++
++}  // namespace implementation
++}  // namespace device
++}  // namespace camera
++}  // namespace hardware
++}  // namespace android
+diff --git a/src/android/hal/device/LibcameraDeviceSession.cpp b/src/android/hal/device/LibcameraDeviceSession.cpp
+new file mode 100644
+index 000000000..e84733919
+--- /dev/null
++++ b/src/android/hal/device/LibcameraDeviceSession.cpp
+@@ -0,0 +1,1668 @@
++/*
++ * Copyright (C) 2016 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#define LOG_TAG "LibcameraDeviceSession"
++#include <android/log.h>
++
++#include <set>
++#include <cutils/properties.h>
++#include <utils/Trace.h>
++#include <hardware/gralloc.h>
++#include <hardware/gralloc1.h>
++#include "LibcameraDeviceSession.h"
++
++#include <aidl/android/hardware/camera/device/ErrorCode.h>
++#include <aidl/android/hardware/camera/device/StreamType.h>
++#include <aidl/android/hardware/common/NativeHandle.h>
++
++#include <aidl/android/hardware/graphics/common/BufferUsage.h>
++
++#include <aidlcommonsupport/NativeHandle.h>
++
++namespace android {
++namespace hardware {
++namespace camera {
++namespace device {
++namespace implementation {
++
++using ::aidl::android::hardware::camera::device::StreamType;
++using ::aidl::android::hardware::camera::device::ErrorCode;
++using ::aidl::android::hardware::camera::device::ErrorMsg;
++using ::aidl::android::hardware::camera::device::ShutterMsg;
++using ::aidl::android::hardware::common::NativeHandle;
++using ::aidl::android::hardware::graphics::common::BufferUsage;
++
++constexpr bool usageTest(const BufferUsage a, const BufferUsage b) {
++    return (static_cast<uint64_t>(a) & static_cast<uint64_t>(b)) != 0;
++}
++
++// Size of request metadata fast message queue. Change to 0 to always use hwbinder buffer.
++static constexpr int32_t CAMERA_REQUEST_METADATA_QUEUE_SIZE = 1 << 20 /* 1MB */;
++// Size of result metadata fast message queue. Change to 0 to always use hwbinder buffer.
++static constexpr int32_t CAMERA_RESULT_METADATA_QUEUE_SIZE  = 1 << 20 /* 1MB */;
++
++// Metadata sent by HAL will be replaced by a compact copy
++// if their (total size >= compact size + METADATA_SHRINK_ABS_THRESHOLD &&
++//           total_size >= compact size * METADATA_SHRINK_REL_THRESHOLD)
++// Heuristically picked by size of one page
++static constexpr int METADATA_SHRINK_ABS_THRESHOLD = 4096;
++static constexpr int METADATA_SHRINK_REL_THRESHOLD = 2;
++
++common::helper::HandleImporter LibcameraDeviceSession::sHandleImporter;
++buffer_handle_t LibcameraDeviceSession::sEmptyBuffer = nullptr;
++
++const int LibcameraDeviceSession::ResultBatcher::NOT_BATCHED;
++
++LibcameraDeviceSession::LibcameraDeviceSession(
++    camera3_device_t* device,
++    const camera_metadata_t* deviceInfo,
++    const std::shared_ptr<ICameraDeviceCallback>& callback) :
++        camera3_callback_ops({&sProcessCaptureResult, &sNotify, nullptr, nullptr}),
++        mDevice(device),
++        mDeviceVersion(device->common.version),
++        mFreeBufEarly(shouldFreeBufEarly()),
++        mIsAELockAvailable(false),
++        mDerivePostRawSensKey(false),
++        mNumPartialResults(1),
++        mResultBatcher(callback) {
++    mDeviceInfo = deviceInfo;
++    camera_metadata_entry partialResultsCount =
++            mDeviceInfo.find(ANDROID_REQUEST_PARTIAL_RESULT_COUNT);
++    if (partialResultsCount.count > 0) {
++        mNumPartialResults = partialResultsCount.data.i32[0];
++    }
++    mResultBatcher.setNumPartialResults(mNumPartialResults);
++
++    camera_metadata_entry aeLockAvailableEntry = mDeviceInfo.find(
++            ANDROID_CONTROL_AE_LOCK_AVAILABLE);
++    if (aeLockAvailableEntry.count > 0) {
++        mIsAELockAvailable = (aeLockAvailableEntry.data.u8[0] ==
++                ANDROID_CONTROL_AE_LOCK_AVAILABLE_TRUE);
++    }
++
++    // Determine whether we need to derive sensitivity boost values for older devices.
++    // If post-RAW sensitivity boost range is listed, so should post-raw sensitivity control
++    // be listed (as the default value 100)
++    if (mDeviceInfo.exists(ANDROID_CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE)) {
++        mDerivePostRawSensKey = true;
++    }
++
++    mInitFail = initialize();
++}
++
++bool LibcameraDeviceSession::initialize() {
++    /** Initialize device with callback functions */
++    ATRACE_BEGIN("camera3->initialize");
++    status_t res = mDevice->ops->initialize(mDevice, this);
++    ATRACE_END();
++
++    if (res != OK) {
++        ALOGE("%s: Unable to initialize HAL device: %s (%d)",
++                __FUNCTION__, strerror(-res), res);
++        mDevice->common.close(&mDevice->common);
++        mClosed = true;
++        return true;
++    }
++
++    // "ro.camera" properties are no longer supported on vendor side.
++    //  Support a fall back for the fmq size override that uses "ro.vendor.camera"
++    //  properties.
++    int32_t reqFMQSize = property_get_int32("ro.vendor.camera.req.fmq.size", /*default*/-1);
++    if (reqFMQSize < 0) {
++        reqFMQSize = property_get_int32("ro.camera.req.fmq.size", /*default*/-1);
++        if (reqFMQSize < 0) {
++            reqFMQSize = CAMERA_REQUEST_METADATA_QUEUE_SIZE;
++        } else {
++            ALOGV("%s: request FMQ size overridden to %d", __FUNCTION__, reqFMQSize);
++        }
++    } else {
++        ALOGV("%s: request FMQ size overridden to %d via fallback property", __FUNCTION__,
++                reqFMQSize);
++    }
++
++    mRequestMetadataQueue = std::make_unique<RequestMetadataQueue>(
++            static_cast<size_t>(reqFMQSize),
++            false /* non blocking */);
++    if (!mRequestMetadataQueue->isValid()) {
++        ALOGE("%s: invalid request fmq", __FUNCTION__);
++        return true;
++    }
++
++    // "ro.camera" properties are no longer supported on vendor side.
++    //  Support a fall back for the fmq size override that uses "ro.vendor.camera"
++    //  properties.
++    int32_t resFMQSize = property_get_int32("ro.vendor.camera.res.fmq.size", /*default*/-1);
++    if (resFMQSize < 0) {
++        resFMQSize = property_get_int32("ro.camera.res.fmq.size", /*default*/-1);
++        if (resFMQSize < 0) {
++            resFMQSize = CAMERA_RESULT_METADATA_QUEUE_SIZE;
++        } else {
++            ALOGV("%s: result FMQ size overridden to %d", __FUNCTION__, resFMQSize);
++        }
++    } else {
++        ALOGV("%s: result FMQ size overridden to %d via fallback property", __FUNCTION__,
++                resFMQSize);
++    }
++
++    mResultMetadataQueue = std::make_shared<RequestMetadataQueue>(
++            static_cast<size_t>(resFMQSize),
++            false /* non blocking */);
++    if (!mResultMetadataQueue->isValid()) {
++        ALOGE("%s: invalid result fmq", __FUNCTION__);
++        return true;
++    }
++    mResultBatcher.setResultMetadataQueue(mResultMetadataQueue);
++
++    return false;
++}
++
++bool LibcameraDeviceSession::shouldFreeBufEarly() {
++    return property_get_bool("ro.vendor.camera.free_buf_early", 0) == 1;
++}
++
++LibcameraDeviceSession::~LibcameraDeviceSession() {
++    if (!isClosed()) {
++        ALOGE("LibcameraDeviceSession deleted before close!");
++        close();
++    }
++}
++
++bool LibcameraDeviceSession::isClosed() {
++    Mutex::Autolock _l(mStateLock);
++    return mClosed;
++}
++
++Status LibcameraDeviceSession::initStatus() const {
++    Mutex::Autolock _l(mStateLock);
++    Status status = Status::OK;
++    if (mInitFail) {
++        status = Status::INTERNAL_ERROR;
++    } else if (mDisconnected) {
++        status = Status::CAMERA_DISCONNECTED;
++    } else if (mClosed) {
++        status = Status::INTERNAL_ERROR;
++    }
++    return status;
++}
++
++void LibcameraDeviceSession::disconnect() {
++    Mutex::Autolock _l(mStateLock);
++    mDisconnected = true;
++    ALOGW("%s: Camera device is disconnected. Closing.", __FUNCTION__);
++    if (!mClosed) {
++        mDevice->common.close(&mDevice->common);
++        mClosed = true;
++    }
++}
++
++void LibcameraDeviceSession::dumpState(const native_handle_t* fd) {
++    if (!isClosed()) {
++        mDevice->ops->dump(mDevice, fd->data[0]);
++    }
++}
++
++/**
++ * For devices <= CAMERA_DEVICE_API_VERSION_3_2, AE_PRECAPTURE_TRIGGER_CANCEL is not supported so
++ * we need to override AE_PRECAPTURE_TRIGGER_CANCEL to AE_PRECAPTURE_TRIGGER_IDLE and AE_LOCK_OFF
++ * to AE_LOCK_ON to start cancelling AE precapture. If AE lock is not available, it still overrides
++ * AE_PRECAPTURE_TRIGGER_CANCEL to AE_PRECAPTURE_TRIGGER_IDLE but doesn't add AE_LOCK_ON to the
++ * request.
++ */
++bool LibcameraDeviceSession::handleAePrecaptureCancelRequestLocked(
++        const camera3_capture_request_t &halRequest,
++        ::android::hardware::camera::common::V1_0::helper::CameraMetadata *settings /*out*/,
++         AETriggerCancelOverride *override /*out*/) {
++    if ((mDeviceVersion > CAMERA_DEVICE_API_VERSION_3_2) ||
++            (nullptr == halRequest.settings) || (nullptr == settings) ||
++            (0 == get_camera_metadata_entry_count(halRequest.settings))) {
++        return false;
++    }
++
++    settings->clear();
++    settings->append(halRequest.settings);
++    camera_metadata_entry_t aePrecaptureTrigger =
++            settings->find(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER);
++    if (aePrecaptureTrigger.count > 0 &&
++            aePrecaptureTrigger.data.u8[0] ==
++                    ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL) {
++        // Always override CANCEL to IDLE
++        uint8_t aePrecaptureTrigger =
++                ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_IDLE;
++        settings->update(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER,
++                &aePrecaptureTrigger, 1);
++        *override = { false, ANDROID_CONTROL_AE_LOCK_OFF,
++                true, ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL };
++
++        if (mIsAELockAvailable == true) {
++            camera_metadata_entry_t aeLock = settings->find(
++                    ANDROID_CONTROL_AE_LOCK);
++            if (aeLock.count == 0 || aeLock.data.u8[0] ==
++                    ANDROID_CONTROL_AE_LOCK_OFF) {
++                uint8_t aeLock = ANDROID_CONTROL_AE_LOCK_ON;
++                settings->update(ANDROID_CONTROL_AE_LOCK, &aeLock, 1);
++                override->applyAeLock = true;
++                override->aeLock = ANDROID_CONTROL_AE_LOCK_OFF;
++            }
++        }
++
++        return true;
++    }
++
++    return false;
++}
++
++/**
++ * Override result metadata for cancelling AE precapture trigger applied in
++ * handleAePrecaptureCancelRequestLocked().
++ */
++void LibcameraDeviceSession::overrideResultForPrecaptureCancelLocked(
++        const AETriggerCancelOverride &aeTriggerCancelOverride,
++        ::android::hardware::camera::common::V1_0::helper::CameraMetadata *settings /*out*/) {
++    if (aeTriggerCancelOverride.applyAeLock) {
++        // Only devices <= v3.2 should have this override
++        assert(mDeviceVersion <= CAMERA_DEVICE_API_VERSION_3_2);
++        settings->update(ANDROID_CONTROL_AE_LOCK, &aeTriggerCancelOverride.aeLock, 1);
++    }
++
++    if (aeTriggerCancelOverride.applyAePrecaptureTrigger) {
++        // Only devices <= v3.2 should have this override
++        assert(mDeviceVersion <= CAMERA_DEVICE_API_VERSION_3_2);
++        settings->update(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER,
++                &aeTriggerCancelOverride.aePrecaptureTrigger, 1);
++    }
++}
++
++Status LibcameraDeviceSession::importBuffer(int32_t streamId,
++        uint64_t bufId, buffer_handle_t buf,
++        /*out*/buffer_handle_t** outBufPtr,
++        bool allowEmptyBuf) {
++
++    if (buf == nullptr && bufId == BUFFER_ID_NO_BUFFER) {
++        if (allowEmptyBuf) {
++            *outBufPtr = &sEmptyBuffer;
++            return Status::OK;
++        } else {
++            ALOGE("%s: bufferId %" PRIu64 " has null buffer handle!", __FUNCTION__, bufId);
++            return Status::ILLEGAL_ARGUMENT;
++        }
++    }
++
++    Mutex::Autolock _l(mInflightLock);
++    CirculatingBuffers& cbs = mCirculatingBuffers[streamId];
++    if (cbs.count(bufId) == 0) {
++        // Register a newly seen buffer
++        buffer_handle_t importedBuf = buf;
++        sHandleImporter.importBuffer(importedBuf);
++        if (importedBuf == nullptr) {
++            ALOGE("%s: output buffer for stream %d is invalid!", __FUNCTION__, streamId);
++            return Status::ILLEGAL_ARGUMENT;
++        } else {
++            cbs[bufId] = importedBuf;
++        }
++    }
++    *outBufPtr = &cbs[bufId];
++    return Status::OK;
++}
++
++Status LibcameraDeviceSession::importRequest(
++        const CaptureRequest& request,
++        std::vector<buffer_handle_t*>& allBufPtrs,
++        std::vector<int>& allFences) {
++    return importRequestImpl(request, allBufPtrs, allFences);
++}
++
++Status LibcameraDeviceSession::importRequestImpl(
++        const CaptureRequest& request,
++        std::vector<buffer_handle_t*>& allBufPtrs,
++        std::vector<int>& allFences,
++        bool allowEmptyBuf) {
++    bool hasInputBuf = (request.inputBuffer.streamId != -1 &&
++            request.inputBuffer.bufferId != 0);
++    size_t numOutputBufs = request.outputBuffers.size();
++    size_t numBufs = numOutputBufs + (hasInputBuf ? 1 : 0);
++    // Validate all I/O buffers
++    std::vector<buffer_handle_t> allBufs;
++    std::vector<uint64_t> allBufIds;
++    allBufs.resize(numBufs);
++    allBufIds.resize(numBufs);
++    allBufPtrs.resize(numBufs);
++    allFences.resize(numBufs);
++    std::vector<int32_t> streamIds(numBufs);
++
++    for (size_t i = 0; i < numOutputBufs; i++) {
++        allBufs[i] = makeFromAidl(request.outputBuffers[i].buffer);
++        allBufIds[i] = request.outputBuffers[i].bufferId;
++        allBufPtrs[i] = &allBufs[i];
++        streamIds[i] = request.outputBuffers[i].streamId;
++    }
++    if (hasInputBuf) {
++        allBufs[numOutputBufs] = makeFromAidl(request.inputBuffer.buffer);
++        allBufIds[numOutputBufs] = request.inputBuffer.bufferId;
++        allBufPtrs[numOutputBufs] = &allBufs[numOutputBufs];
++        streamIds[numOutputBufs] = request.inputBuffer.streamId;
++    }
++
++    for (size_t i = 0; i < numBufs; i++) {
++        Status st = importBuffer(
++                streamIds[i], allBufIds[i], allBufs[i], &allBufPtrs[i],
++                // Disallow empty buf for input stream, otherwise follow
++                // the allowEmptyBuf argument.
++                (hasInputBuf && i == numOutputBufs) ? false : allowEmptyBuf);
++        if (st != Status::OK) {
++            // Detailed error logs printed in importBuffer
++            return st;
++        }
++    }
++
++    // All buffers are imported. Now validate output buffer acquire fences
++    for (size_t i = 0; i < numOutputBufs; i++) {
++        if (!sHandleImporter.importFence(
++                makeFromAidl(request.outputBuffers[i].acquireFence), allFences[i])) {
++            ALOGE("%s: output buffer %zu acquire fence is invalid", __FUNCTION__, i);
++            cleanupInflightFences(allFences, i);
++            return Status::INTERNAL_ERROR;
++        }
++    }
++
++    // Validate input buffer acquire fences
++    if (hasInputBuf) {
++        if (!sHandleImporter.importFence(
++                makeFromAidl(request.inputBuffer.acquireFence), allFences[numOutputBufs])) {
++            ALOGE("%s: input buffer acquire fence is invalid", __FUNCTION__);
++            cleanupInflightFences(allFences, numOutputBufs);
++            return Status::INTERNAL_ERROR;
++        }
++    }
++    return Status::OK;
++}
++
++void LibcameraDeviceSession::cleanupInflightFences(
++        std::vector<int>& allFences, size_t numFences) {
++    for (size_t j = 0; j < numFences; j++) {
++        sHandleImporter.closeFence(allFences[j]);
++    }
++}
++
++LibcameraDeviceSession::ResultBatcher::ResultBatcher(
++        const std::shared_ptr<ICameraDeviceCallback>& callback) : mCallback(callback) {};
++
++bool LibcameraDeviceSession::ResultBatcher::InflightBatch::allDelivered() const {
++    if (!mShutterDelivered) return false;
++
++    if (mPartialResultProgress < mNumPartialResults) {
++        return false;
++    }
++
++    for (const auto& pair : mBatchBufs) {
++        if (!pair.second.mDelivered) {
++            return false;
++        }
++    }
++    return true;
++}
++
++void LibcameraDeviceSession::ResultBatcher::setNumPartialResults(uint32_t n) {
++    Mutex::Autolock _l(mLock);
++    mNumPartialResults = n;
++}
++
++void LibcameraDeviceSession::ResultBatcher::setBatchedStreams(
++        const std::vector<int>& streamsToBatch) {
++    Mutex::Autolock _l(mLock);
++    mStreamsToBatch = streamsToBatch;
++}
++
++void LibcameraDeviceSession::ResultBatcher::setResultMetadataQueue(
++        std::shared_ptr<ResultMetadataQueue> q) {
++    Mutex::Autolock _l(mLock);
++    mResultMetadataQueue = q;
++}
++
++void LibcameraDeviceSession::ResultBatcher::registerBatch(uint32_t frameNumber, uint32_t batchSize) {
++    auto batch = std::make_shared<InflightBatch>();
++    batch->mFirstFrame = frameNumber;
++    batch->mBatchSize = batchSize;
++    batch->mLastFrame = batch->mFirstFrame + batch->mBatchSize - 1;
++    batch->mNumPartialResults = mNumPartialResults;
++    for (int id : mStreamsToBatch) {
++        batch->mBatchBufs.emplace(id, batch->mBatchSize);
++    }
++    Mutex::Autolock _l(mLock);
++    mInflightBatches.push_back(batch);
++}
++
++std::pair<int, std::shared_ptr<LibcameraDeviceSession::ResultBatcher::InflightBatch>>
++LibcameraDeviceSession::ResultBatcher::getBatch(
++        uint32_t frameNumber) {
++    Mutex::Autolock _l(mLock);
++    int numBatches = mInflightBatches.size();
++    if (numBatches == 0) {
++        return std::make_pair(NOT_BATCHED, nullptr);
++    }
++    uint32_t frameMin = mInflightBatches[0]->mFirstFrame;
++    uint32_t frameMax = mInflightBatches[numBatches - 1]->mLastFrame;
++    if (frameNumber < frameMin || frameNumber > frameMax) {
++        return std::make_pair(NOT_BATCHED, nullptr);
++    }
++    for (int i = 0; i < numBatches; i++) {
++        if (frameNumber >= mInflightBatches[i]->mFirstFrame &&
++                frameNumber <= mInflightBatches[i]->mLastFrame) {
++            return std::make_pair(i, mInflightBatches[i]);
++        }
++    }
++    return std::make_pair(NOT_BATCHED, nullptr);
++}
++
++void LibcameraDeviceSession::ResultBatcher::checkAndRemoveFirstBatch() {
++    Mutex::Autolock _l(mLock);
++    if (mInflightBatches.size() > 0) {
++        std::shared_ptr<InflightBatch> batch = mInflightBatches[0];
++        bool shouldRemove = false;
++        {
++            Mutex::Autolock _l(batch->mLock);
++            if (batch->allDelivered()) {
++                batch->mRemoved = true;
++                shouldRemove = true;
++            }
++        }
++        if (shouldRemove) {
++            mInflightBatches.pop_front();
++        }
++    }
++}
++
++void LibcameraDeviceSession::ResultBatcher::sendBatchShutterCbsLocked(
++        std::shared_ptr<InflightBatch> batch) {
++    if (batch->mShutterDelivered) {
++        ALOGW("%s: batch shutter callback already sent!", __FUNCTION__);
++        return;
++    }
++
++    auto ret = mCallback->notify(batch->mShutterMsgs);
++    if (!ret.isOk()) {
++        ALOGE("%s: notify shutter transaction failed: %s",
++                __FUNCTION__, ret.getMessage());
++    }
++    batch->mShutterDelivered = true;
++    batch->mShutterMsgs.clear();
++}
++
++void LibcameraDeviceSession::ResultBatcher::freeReleaseFences(std::vector<CaptureResult>& results) {
++    for (auto& result : results) {
++        native_handle_t* handle = makeFromAidl(result.inputBuffer.releaseFence);
++        if (handle != nullptr) {
++            native_handle_close(handle);
++            native_handle_delete(handle);
++        }
++        for (auto& buf : result.outputBuffers) {
++            native_handle_t* resultFence = makeFromAidl(buf.releaseFence);
++            if (resultFence != nullptr) {
++                native_handle_close(handle);
++                native_handle_delete(handle);
++            }
++        }
++    }
++    return;
++}
++
++void LibcameraDeviceSession::ResultBatcher::moveStreamBuffer(StreamBuffer&& src, StreamBuffer& dst) {
++    // Only dealing with releaseFence here. Assume buffer/acquireFence are null
++    dst.releaseFence = std::move(src.releaseFence);
++}
++
++void LibcameraDeviceSession::ResultBatcher::pushStreamBuffer(
++        StreamBuffer&& src, std::vector<StreamBuffer>& dst) {
++    dst.push_back(std::move(src));
++}
++
++void LibcameraDeviceSession::ResultBatcher::sendBatchBuffersLocked(
++        std::shared_ptr<InflightBatch> batch) {
++    sendBatchBuffersLocked(batch, mStreamsToBatch);
++}
++
++void LibcameraDeviceSession::ResultBatcher::sendBatchBuffersLocked(
++        std::shared_ptr<InflightBatch> batch, const std::vector<int>& streams) {
++    size_t batchSize = 0;
++    for (int streamId : streams) {
++        auto it = batch->mBatchBufs.find(streamId);
++        if (it != batch->mBatchBufs.end()) {
++            InflightBatch::BufferBatch& bb = it->second;
++            if (bb.mDelivered) {
++                continue;
++            }
++            if (bb.mBuffers.size() > batchSize) {
++                batchSize = bb.mBuffers.size();
++            }
++        } else {
++            ALOGE("%s: stream ID %d is not batched!", __FUNCTION__, streamId);
++            return;
++        }
++    }
++
++    if (batchSize == 0) {
++        ALOGW("%s: there is no buffer to be delivered for this batch.", __FUNCTION__);
++        for (int streamId : streams) {
++            auto it = batch->mBatchBufs.find(streamId);
++            if (it == batch->mBatchBufs.end()) {
++                ALOGE("%s: cannot find stream %d in batched buffers!", __FUNCTION__, streamId);
++                return;
++            }
++            InflightBatch::BufferBatch& bb = it->second;
++            bb.mDelivered = true;
++        }
++        return;
++    }
++
++    std::vector<CaptureResult> results;
++    results.resize(batchSize);
++    for (size_t i = 0; i < batchSize; i++) {
++        results[i].frameNumber = batch->mFirstFrame + i;
++        results[i].fmqResultSize = 0;
++        results[i].partialResult = 0; // 0 for buffer only results
++        results[i].inputBuffer.streamId = -1;
++        results[i].inputBuffer.bufferId = 0;
++        results[i].inputBuffer.buffer = NativeHandle();
++        std::vector<StreamBuffer> outBufs;
++        outBufs.reserve(streams.size());
++        for (int streamId : streams) {
++            auto it = batch->mBatchBufs.find(streamId);
++            if (it == batch->mBatchBufs.end()) {
++                ALOGE("%s: cannot find stream %d in batched buffers!", __FUNCTION__, streamId);
++                return;
++            }
++            InflightBatch::BufferBatch& bb = it->second;
++            if (bb.mDelivered) {
++                continue;
++            }
++            if (i < bb.mBuffers.size()) {
++                pushStreamBuffer(std::move(bb.mBuffers[i]), outBufs);
++            }
++        }
++        results[i].outputBuffers.resize(outBufs.size());
++        for (size_t j = 0; j < outBufs.size(); j++) {
++            moveStreamBuffer(std::move(outBufs[j]), results[i].outputBuffers[j]);
++        }
++    }
++    invokeProcessCaptureResultCallback(results, /* tryWriteFmq */false);
++    freeReleaseFences(results);
++    for (int streamId : streams) {
++        auto it = batch->mBatchBufs.find(streamId);
++        if (it == batch->mBatchBufs.end()) {
++            ALOGE("%s: cannot find stream %d in batched buffers!", __FUNCTION__, streamId);
++            return;
++        }
++        InflightBatch::BufferBatch& bb = it->second;
++        bb.mDelivered = true;
++        bb.mBuffers.clear();
++    }
++}
++
++void LibcameraDeviceSession::ResultBatcher::sendBatchMetadataLocked(
++    std::shared_ptr<InflightBatch> batch, uint32_t lastPartialResultIdx) {
++    if (lastPartialResultIdx <= batch->mPartialResultProgress) {
++        // Result has been delivered. Return
++        ALOGW("%s: partial result %u has been delivered", __FUNCTION__, lastPartialResultIdx);
++        return;
++    }
++
++    std::vector<CaptureResult> results;
++    std::vector<uint32_t> toBeRemovedIdxes;
++    for (auto& pair : batch->mResultMds) {
++        uint32_t partialIdx = pair.first;
++        if (partialIdx > lastPartialResultIdx) {
++            continue;
++        }
++        toBeRemovedIdxes.push_back(partialIdx);
++        InflightBatch::MetadataBatch& mb = pair.second;
++        for (const auto& p : mb.mMds) {
++            CaptureResult result;
++            result.frameNumber = p.first;
++            result.result = std::move(p.second);
++            result.fmqResultSize = 0;
++            result.inputBuffer.streamId = -1;
++            result.inputBuffer.bufferId = 0;
++            result.inputBuffer.buffer = NativeHandle();
++            result.partialResult = partialIdx;
++            results.push_back(std::move(result));
++        }
++        mb.mMds.clear();
++    }
++    invokeProcessCaptureResultCallback(results, /* tryWriteFmq */true);
++    batch->mPartialResultProgress = lastPartialResultIdx;
++    for (uint32_t partialIdx : toBeRemovedIdxes) {
++        batch->mResultMds.erase(partialIdx);
++    }
++}
++
++void LibcameraDeviceSession::ResultBatcher::notifySingleMsg(NotifyMsg& msg) {
++    auto ret = mCallback->notify({msg});
++    if (!ret.isOk()) {
++        ALOGE("%s: notify transaction failed: %s",
++                __FUNCTION__, ret.getMessage());
++    }
++    return;
++}
++
++void LibcameraDeviceSession::ResultBatcher::notify(NotifyMsg& msg) {
++    uint32_t frameNumber;
++    if (CC_LIKELY(msg.getTag() == NotifyMsg::Tag::shutter)) {
++        ShutterMsg shutterMsg = msg.get<NotifyMsg::Tag::shutter>();
++        frameNumber = shutterMsg.frameNumber;
++    } else {
++        ErrorMsg errorMsg = msg.get<NotifyMsg::Tag::error>();
++        frameNumber = errorMsg.frameNumber;
++    }
++
++    auto pair = getBatch(frameNumber);
++    int batchIdx = pair.first;
++    if (batchIdx == NOT_BATCHED) {
++        notifySingleMsg(msg);
++        return;
++    }
++
++    // When error happened, stop batching for all batches earlier
++    if (CC_UNLIKELY(msg.getTag() == NotifyMsg::Tag::error)) {
++        Mutex::Autolock _l(mLock);
++        for (int i = 0; i <= batchIdx; i++) {
++            // Send batched data up
++            std::shared_ptr<InflightBatch> batch = mInflightBatches[0];
++            {
++                Mutex::Autolock _l(batch->mLock);
++                sendBatchShutterCbsLocked(batch);
++                sendBatchBuffersLocked(batch);
++                sendBatchMetadataLocked(batch, mNumPartialResults);
++                if (!batch->allDelivered()) {
++                    ALOGE("%s: error: some batch data not sent back to framework!",
++                            __FUNCTION__);
++                }
++                batch->mRemoved = true;
++            }
++            mInflightBatches.pop_front();
++        }
++        // Send the error up
++        notifySingleMsg(msg);
++        return;
++    }
++    // Queue shutter callbacks for future delivery
++    std::shared_ptr<InflightBatch> batch = pair.second;
++    {
++        Mutex::Autolock _l(batch->mLock);
++        // Check if the batch is removed (mostly by notify error) before lock was acquired
++        if (batch->mRemoved) {
++            // Fall back to non-batch path
++            notifySingleMsg(msg);
++            return;
++        }
++
++        batch->mShutterMsgs.push_back(msg);
++        if (frameNumber == batch->mLastFrame) {
++            sendBatchShutterCbsLocked(batch);
++        }
++    } // end of batch lock scope
++
++    // see if the batch is complete
++    if (frameNumber == batch->mLastFrame) {
++        checkAndRemoveFirstBatch();
++    }
++}
++
++void LibcameraDeviceSession::ResultBatcher::invokeProcessCaptureResultCallback(
++        std::vector<CaptureResult> &results, bool tryWriteFmq) {
++    if (mProcessCaptureResultLock.tryLock() != OK) {
++        ALOGV("%s: previous call is not finished! waiting 1s...", __FUNCTION__);
++        if (mProcessCaptureResultLock.timedLock(1000000000 /* 1s */) != OK) {
++            ALOGE("%s: cannot acquire lock in 1s, cannot proceed",
++                    __FUNCTION__);
++            return;
++        }
++    }
++    if (tryWriteFmq && mResultMetadataQueue->availableToWrite() > 0) {
++        for (CaptureResult &result : results) {
++            if (result.result.metadata.size() > 0) {
++                auto res = result.result;
++                if (mResultMetadataQueue->write(reinterpret_cast<int8_t*>(res.metadata.data()),
++                                                res.metadata.size())) {
++                    result.fmqResultSize = res.metadata.size();
++                    res.metadata.resize(0);
++                } else {
++                    ALOGW("%s: couldn't utilize fmq, fall back to hwbinder, result size: %zu,"
++                    "shared message queue available size: %zu",
++                        __FUNCTION__, res.metadata.size(),
++                        mResultMetadataQueue->availableToWrite());
++                    result.fmqResultSize = 0;
++                }
++            }
++        }
++    }
++    auto ret = mCallback->processCaptureResult(results);
++    if (!ret.isOk()) {
++        ALOGE("%s: processCaptureResult transaction failed: %s",
++                __FUNCTION__, ret.getMessage());
++    }
++    mProcessCaptureResultLock.unlock();
++}
++
++void LibcameraDeviceSession::ResultBatcher::processOneCaptureResult(CaptureResult& result) {
++    std::vector<CaptureResult> results;
++    results.resize(1);
++    results[0] = std::move(result);
++    invokeProcessCaptureResultCallback(results, /* tryWriteFmq */true);
++    freeReleaseFences(results);
++    return;
++}
++
++void LibcameraDeviceSession::ResultBatcher::processCaptureResult(CaptureResult& result) {
++    auto pair = getBatch(result.frameNumber);
++    int batchIdx = pair.first;
++    if (batchIdx == NOT_BATCHED) {
++        processOneCaptureResult(result);
++        return;
++    }
++    std::shared_ptr<InflightBatch> batch = pair.second;
++    {
++        Mutex::Autolock _l(batch->mLock);
++        // Check if the batch is removed (mostly by notify error) before lock was acquired
++        if (batch->mRemoved) {
++            // Fall back to non-batch path
++            processOneCaptureResult(result);
++            return;
++        }
++
++        // queue metadata
++        if (result.result.metadata.size() != 0) {
++            // Save a copy of metadata
++            batch->mResultMds[result.partialResult].mMds.push_back(
++                    std::make_pair(result.frameNumber, result.result));
++        }
++
++        // queue buffer
++        std::vector<int> filledStreams;
++        std::vector<StreamBuffer> nonBatchedBuffers;
++        for (auto& buffer : result.outputBuffers) {
++            auto it = batch->mBatchBufs.find(buffer.streamId);
++            if (it != batch->mBatchBufs.end()) {
++                InflightBatch::BufferBatch& bb = it->second;
++                auto id = buffer.streamId;
++                pushStreamBuffer(std::move(buffer), bb.mBuffers);
++                filledStreams.push_back(id);
++            } else {
++                pushStreamBuffer(std::move(buffer), nonBatchedBuffers);
++            }
++        }
++
++        // send non-batched buffers up
++        if (nonBatchedBuffers.size() > 0 || result.inputBuffer.streamId != -1) {
++            CaptureResult nonBatchedResult;
++            nonBatchedResult.frameNumber = result.frameNumber;
++            nonBatchedResult.fmqResultSize = 0;
++            nonBatchedResult.outputBuffers.resize(nonBatchedBuffers.size());
++            for (size_t i = 0; i < nonBatchedBuffers.size(); i++) {
++                moveStreamBuffer(
++                        std::move(nonBatchedBuffers[i]), nonBatchedResult.outputBuffers[i]);
++            }
++            moveStreamBuffer(std::move(result.inputBuffer), nonBatchedResult.inputBuffer);
++            nonBatchedResult.partialResult = 0; // 0 for buffer only results
++            processOneCaptureResult(nonBatchedResult);
++        }
++
++        if (result.frameNumber == batch->mLastFrame) {
++            // Send data up
++            if (result.partialResult > 0) {
++                sendBatchMetadataLocked(batch, result.partialResult);
++            }
++            // send buffer up
++            if (filledStreams.size() > 0) {
++                sendBatchBuffersLocked(batch, filledStreams);
++            }
++        }
++    } // end of batch lock scope
++
++    // see if the batch is complete
++    if (result.frameNumber == batch->mLastFrame) {
++        checkAndRemoveFirstBatch();
++    }
++}
++
++ScopedAStatus LibcameraDeviceSession::constructDefaultRequestSettings(RequestTemplate in_type,
++                                                                      CameraMetadata* _aidl_return) {
++    Status status = constructDefaultRequestSettingsRaw((int)in_type, _aidl_return);
++    return fromStatus(status);
++}
++
++Status LibcameraDeviceSession::constructDefaultRequestSettingsRaw(int type, CameraMetadata *outMetadata) {
++    Status status = initStatus();
++    const camera_metadata_t *rawRequest;
++    if (status == Status::OK) {
++        ATRACE_BEGIN("camera3->construct_default_request_settings");
++        rawRequest = mDevice->ops->construct_default_request_settings(mDevice, (int) type);
++        ATRACE_END();
++        if (rawRequest == nullptr) {
++            ALOGI("%s: template %d is not supported on this camera device",
++                  __FUNCTION__, type);
++            status = Status::ILLEGAL_ARGUMENT;
++        } else {
++            mOverridenRequest.clear();
++            mOverridenRequest.append(rawRequest);
++            // Derive some new keys for backward compatibility
++            if (mDerivePostRawSensKey && !mOverridenRequest.exists(
++                    ANDROID_CONTROL_POST_RAW_SENSITIVITY_BOOST)) {
++                int32_t defaultBoost[1] = {100};
++                mOverridenRequest.update(
++                        ANDROID_CONTROL_POST_RAW_SENSITIVITY_BOOST,
++                        defaultBoost, 1);
++            }
++            const camera_metadata_t *metaBuffer =
++                    mOverridenRequest.getAndLock();
++            convertToAidl(metaBuffer, outMetadata);
++            mOverridenRequest.unlock(metaBuffer);
++        }
++    }
++    return status;
++}
++
++/**
++ * Map Android N dataspace definitions back to Android M definitions, for
++ * use with HALv3.3 or older.
++ *
++ * Only map where correspondences exist, and otherwise preserve the value.
++ */
++android_dataspace LibcameraDeviceSession::mapToLegacyDataspace(
++        android_dataspace dataSpace) const {
++    if (mDeviceVersion <= CAMERA_DEVICE_API_VERSION_3_3) {
++        switch (dataSpace) {
++            case HAL_DATASPACE_V0_SRGB_LINEAR:
++                return HAL_DATASPACE_SRGB_LINEAR;
++            case HAL_DATASPACE_V0_SRGB:
++                return HAL_DATASPACE_SRGB;
++            case HAL_DATASPACE_V0_JFIF:
++                return HAL_DATASPACE_JFIF;
++            case HAL_DATASPACE_V0_BT601_625:
++                return HAL_DATASPACE_BT601_625;
++            case HAL_DATASPACE_V0_BT601_525:
++                return HAL_DATASPACE_BT601_525;
++            case HAL_DATASPACE_V0_BT709:
++                return HAL_DATASPACE_BT709;
++            default:
++                return dataSpace;
++        }
++    }
++
++   return dataSpace;
++}
++
++bool LibcameraDeviceSession::preProcessConfigurationLocked(
++        const StreamConfiguration& in_requestedConfiguration,
++        camera3_stream_configuration_t *stream_list /*out*/,
++        std::vector<camera3_stream_t*> *streams /*out*/) {
++
++    if ((stream_list == nullptr) || (streams == nullptr)) {
++        return false;
++    }
++
++    stream_list->operation_mode = (uint32_t) in_requestedConfiguration.operationMode;
++    stream_list->num_streams = in_requestedConfiguration.streams.size();
++    streams->resize(stream_list->num_streams);
++    stream_list->streams = streams->data();
++
++    for (uint32_t i = 0; i < stream_list->num_streams; i++) {
++        int id = in_requestedConfiguration.streams[i].id;
++
++        if (mStreamMap.count(id) == 0) {
++            Camera3Stream stream;
++            convertFromAidl(in_requestedConfiguration.streams[i], &stream);
++            mStreamMap[id] = stream;
++            mStreamMap[id].data_space = mapToLegacyDataspace(
++                    mStreamMap[id].data_space);
++            mCirculatingBuffers.emplace(stream.mId, CirculatingBuffers{});
++        } else {
++            // width/height/format must not change, but usage/rotation might need to change
++            if (mStreamMap[id].stream_type !=
++                    (int) in_requestedConfiguration.streams[i].streamType ||
++                    mStreamMap[id].width != in_requestedConfiguration.streams[i].width ||
++                    mStreamMap[id].height != in_requestedConfiguration.streams[i].height ||
++                    mStreamMap[id].format != (int) in_requestedConfiguration.streams[i].format ||
++                    mStreamMap[id].data_space !=
++                            mapToLegacyDataspace( static_cast<android_dataspace_t> (
++                                    in_requestedConfiguration.streams[i].dataSpace))) {
++                ALOGE("%s: stream %d configuration changed!", __FUNCTION__, id);
++                return false;
++            }
++            mStreamMap[id].rotation = (int) in_requestedConfiguration.streams[i].rotation;
++            mStreamMap[id].usage = (uint32_t) in_requestedConfiguration.streams[i].usage;
++        }
++        (*streams)[i] = &mStreamMap[id];
++    }
++
++    if (mFreeBufEarly) {
++        // Remove buffers of deleted streams
++        for(auto it = mStreamMap.begin(); it != mStreamMap.end(); it++) {
++            int id = it->first;
++            bool found = false;
++            for (const auto& stream : in_requestedConfiguration.streams) {
++                if (id == stream.id) {
++                    found = true;
++                    break;
++                }
++            }
++            if (!found) {
++                // Unmap all buffers of deleted stream
++                cleanupBuffersLocked(id);
++            }
++        }
++    }
++
++    return true;
++}
++
++void LibcameraDeviceSession::postProcessConfigurationLocked(
++        const StreamConfiguration& in_requestedConfiguration) {
++    // delete unused streams, note we do this after adding new streams to ensure new stream
++    // will not have the same address as deleted stream, and HAL has a chance to reference
++    // the to be deleted stream in configure_streams call
++    for(auto it = mStreamMap.begin(); it != mStreamMap.end();) {
++        int id = it->first;
++        bool found = false;
++        for (const auto& stream : in_requestedConfiguration.streams) {
++            if (id == stream.id) {
++                found = true;
++                break;
++            }
++        }
++        if (!found) {
++            // Unmap all buffers of deleted stream
++            // in case the configuration call succeeds and HAL
++            // is able to release the corresponding resources too.
++            if (!mFreeBufEarly) {
++                cleanupBuffersLocked(id);
++            }
++            it = mStreamMap.erase(it);
++        } else {
++            ++it;
++        }
++    }
++
++    // Track video streams
++    mVideoStreamIds.clear();
++    for (const auto& stream : in_requestedConfiguration.streams) {
++        if (stream.streamType == StreamType::OUTPUT &&
++            usageTest(stream.usage, BufferUsage::VIDEO_ENCODER)) {
++            mVideoStreamIds.push_back(stream.id);
++        }
++    }
++    mResultBatcher.setBatchedStreams(mVideoStreamIds);
++}
++
++
++void LibcameraDeviceSession::postProcessConfigurationFailureLocked(
++        const StreamConfiguration& in_requestedConfiguration) {
++    if (mFreeBufEarly) {
++        // Re-build the buf cache entry for deleted streams
++        for(auto it = mStreamMap.begin(); it != mStreamMap.end(); it++) {
++            int id = it->first;
++            bool found = false;
++            for (const auto& stream : in_requestedConfiguration.streams) {
++                if (id == stream.id) {
++                    found = true;
++                    break;
++                }
++            }
++            if (!found) {
++                mCirculatingBuffers.emplace(id, CirculatingBuffers{});
++            }
++        }
++    }
++}
++
++ScopedAStatus LibcameraDeviceSession::configureStreams(
++        const StreamConfiguration& in_requestedConfiguration,
++        std::vector<HalStream>* _aidl_return) {
++    Status status = initStatus();
++
++    // hold the inflight lock for entire configureStreams scope since there must not be any
++    // inflight request/results during stream configuration.
++    Mutex::Autolock _l(mInflightLock);
++    if (!mInflightBuffers.empty()) {
++        ALOGE("%s: trying to configureStreams while there are still %zu inflight buffers!",
++                __FUNCTION__, mInflightBuffers.size());
++        _aidl_return = nullptr;
++        return fromStatus(Status::INTERNAL_ERROR);
++    }
++
++    if (!mInflightAETriggerOverrides.empty()) {
++        ALOGE("%s: trying to configureStreams while there are still %zu inflight"
++                " trigger overrides!", __FUNCTION__,
++                mInflightAETriggerOverrides.size());
++        _aidl_return = nullptr;
++        return fromStatus(Status::INTERNAL_ERROR);
++    }
++
++    if (!mInflightRawBoostPresent.empty()) {
++        ALOGE("%s: trying to configureStreams while there are still %zu inflight"
++                " boost overrides!", __FUNCTION__,
++                mInflightRawBoostPresent.size());
++        _aidl_return = nullptr;
++        return fromStatus(Status::INTERNAL_ERROR);
++    }
++
++    if (status != Status::OK) {
++        _aidl_return = nullptr;
++        return fromStatus(status);
++    }
++
++    camera3_stream_configuration_t stream_list{};
++    std::vector<camera3_stream_t*> streams;
++    if (!preProcessConfigurationLocked(in_requestedConfiguration, &stream_list, &streams)) {
++        _aidl_return = nullptr;
++        return fromStatus(Status::INTERNAL_ERROR);
++    }
++
++    ATRACE_BEGIN("camera3->configure_streams");
++    status_t ret = mDevice->ops->configure_streams(mDevice, &stream_list);
++    ATRACE_END();
++
++    // In case Hal returns error most likely it was not able to release
++    // the corresponding resources of the deleted streams.
++    if (ret == OK) {
++        postProcessConfigurationLocked(in_requestedConfiguration);
++    } else {
++        postProcessConfigurationFailureLocked(in_requestedConfiguration);
++    }
++
++    if (ret == -EINVAL) {
++        status = Status::ILLEGAL_ARGUMENT;
++    } else if (ret != OK) {
++        status = Status::INTERNAL_ERROR;
++    } else {
++        std::vector<HalStream>& out = *_aidl_return;
++        out.resize(stream_list.num_streams);
++        for (size_t i = 0; i < stream_list.num_streams; i++) {
++            convertToAidl(static_cast<Camera3Stream*>(streams[i]), &out[i]);
++        }
++        mFirstRequest = true;
++    }
++    return fromStatus(status);
++}
++
++// Needs to get called after acquiring 'mInflightLock'
++void LibcameraDeviceSession::cleanupBuffersLocked(int id) {
++    for (auto& pair : mCirculatingBuffers.at(id)) {
++        sHandleImporter.freeBuffer(pair.second);
++    }
++    mCirculatingBuffers[id].clear();
++    mCirculatingBuffers.erase(id);
++}
++
++void LibcameraDeviceSession::updateBufferCaches(const std::vector<BufferCache>& cachesToRemove) {
++    Mutex::Autolock _l(mInflightLock);
++    for (auto& cache : cachesToRemove) {
++        auto cbsIt = mCirculatingBuffers.find(cache.streamId);
++        if (cbsIt == mCirculatingBuffers.end()) {
++            // The stream could have been removed
++            continue;
++        }
++        CirculatingBuffers& cbs = cbsIt->second;
++        auto it = cbs.find(cache.bufferId);
++        if (it != cbs.end()) {
++            sHandleImporter.freeBuffer(it->second);
++            cbs.erase(it);
++        } else {
++            ALOGE("%s: stream %d buffer %" PRIu64 " is not cached",
++                    __FUNCTION__, cache.streamId, cache.bufferId);
++        }
++    }
++}
++
++ScopedAStatus LibcameraDeviceSession::getCaptureRequestMetadataQueue(
++        MQDescriptor<int8_t, SynchronizedReadWrite>* _aidl_return) {
++    *_aidl_return = mRequestMetadataQueue->dupeDesc();
++    return fromStatus(Status::OK);
++}
++
++ScopedAStatus LibcameraDeviceSession::getCaptureResultMetadataQueue(
++        MQDescriptor<int8_t, SynchronizedReadWrite>* _aidl_return) {
++    *_aidl_return = mResultMetadataQueue->dupeDesc();
++    return fromStatus(Status::OK);
++}
++
++ScopedAStatus LibcameraDeviceSession::processCaptureRequest(const std::vector<CaptureRequest>& in_requests,
++                                                            const std::vector<BufferCache>& in_cachesToRemove,
++                                                            int32_t* _aidl_return) {
++    updateBufferCaches(in_cachesToRemove);
++    uint32_t numRequestProcessed = 0;
++    Status s = Status::OK;
++    for (size_t i = 0; i < in_requests.size(); i++, numRequestProcessed++) {
++        s = processOneCaptureRequest(in_requests[i]);
++        if (s != Status::OK) {
++            break;
++        }
++    }
++
++    if (s == Status::OK && in_requests.size() > 1) {
++        mResultBatcher.registerBatch(in_requests[0].frameNumber, in_requests.size());
++    }
++
++    *_aidl_return = numRequestProcessed;
++    return fromStatus(s);
++}
++
++Status LibcameraDeviceSession::processOneCaptureRequest(const CaptureRequest& request)  {
++    Status status = initStatus();
++    if (status != Status::OK) {
++        ALOGE("%s: camera init failed or disconnected", __FUNCTION__);
++        return status;
++    }
++
++    camera3_capture_request_t halRequest;
++    halRequest.frame_number = request.frameNumber;
++
++    bool converted = true;
++    CameraMetadata settingsFmq;  // settings from FMQ
++    if (request.fmqSettingsSize > 0) {
++        // non-blocking read; client must write metadata before calling
++        // processOneCaptureRequest
++        settingsFmq.metadata.resize(request.fmqSettingsSize);
++        bool read = mRequestMetadataQueue->read(reinterpret_cast<int8_t*>(settingsFmq.metadata.data()),
++                                                request.fmqSettingsSize);
++        if (read) {
++            converted = convertFromAidl(settingsFmq, &halRequest.settings);
++        } else {
++            ALOGE("%s: capture request settings metadata couldn't be read from fmq!", __FUNCTION__);
++            converted = false;
++        }
++    } else {
++        converted = convertFromAidl(request.settings, &halRequest.settings);
++    }
++
++    if (!converted) {
++        ALOGE("%s: capture request settings metadata is corrupt!", __FUNCTION__);
++        return Status::ILLEGAL_ARGUMENT;
++    }
++
++    if (mFirstRequest && halRequest.settings == nullptr) {
++        ALOGE("%s: capture request settings must not be null for first request!",
++                __FUNCTION__);
++        return Status::ILLEGAL_ARGUMENT;
++    }
++
++    std::vector<buffer_handle_t*> allBufPtrs;
++    std::vector<int> allFences;
++    bool hasInputBuf = (request.inputBuffer.streamId != -1 &&
++            request.inputBuffer.bufferId != 0);
++    size_t numOutputBufs = request.outputBuffers.size();
++    size_t numBufs = numOutputBufs + (hasInputBuf ? 1 : 0);
++
++    if (numOutputBufs == 0) {
++        ALOGE("%s: capture request must have at least one output buffer!", __FUNCTION__);
++        return Status::ILLEGAL_ARGUMENT;
++    }
++
++    status = importRequest(request, allBufPtrs, allFences);
++    if (status != Status::OK) {
++        return status;
++    }
++
++    std::vector<camera3_stream_buffer_t> outHalBufs;
++    outHalBufs.resize(numOutputBufs);
++    bool aeCancelTriggerNeeded = false;
++    ::android::hardware::camera::common::V1_0::helper::CameraMetadata settingsOverride;
++    {
++        Mutex::Autolock _l(mInflightLock);
++        if (hasInputBuf) {
++            auto key = std::make_pair(request.inputBuffer.streamId, request.frameNumber);
++            auto& bufCache = mInflightBuffers[key] = camera3_stream_buffer_t{};
++            convertFromAidl(
++                    allBufPtrs[numOutputBufs], request.inputBuffer.status,
++                    &mStreamMap[request.inputBuffer.streamId], allFences[numOutputBufs],
++                    &bufCache);
++            halRequest.input_buffer = &bufCache;
++        } else {
++            halRequest.input_buffer = nullptr;
++        }
++
++        halRequest.num_output_buffers = numOutputBufs;
++        for (size_t i = 0; i < numOutputBufs; i++) {
++            auto key = std::make_pair(request.outputBuffers[i].streamId, request.frameNumber);
++            auto& bufCache = mInflightBuffers[key] = camera3_stream_buffer_t{};
++            convertFromAidl(
++                    allBufPtrs[i], request.outputBuffers[i].status,
++                    &mStreamMap[request.outputBuffers[i].streamId], allFences[i],
++                    &bufCache);
++            outHalBufs[i] = bufCache;
++        }
++        halRequest.output_buffers = outHalBufs.data();
++
++        AETriggerCancelOverride triggerOverride;
++        aeCancelTriggerNeeded = handleAePrecaptureCancelRequestLocked(
++                halRequest, &settingsOverride /*out*/, &triggerOverride/*out*/);
++        if (aeCancelTriggerNeeded) {
++            mInflightAETriggerOverrides[halRequest.frame_number] =
++                    triggerOverride;
++            halRequest.settings = settingsOverride.getAndLock();
++        }
++    }
++    halRequest.num_physcam_settings = 0;
++
++    ATRACE_ASYNC_BEGIN("frame capture", request.frameNumber);
++    ATRACE_BEGIN("camera3->process_capture_request");
++    status_t ret = mDevice->ops->process_capture_request(mDevice, &halRequest);
++    ATRACE_END();
++    if (aeCancelTriggerNeeded) {
++        settingsOverride.unlock(halRequest.settings);
++    }
++    if (ret != OK) {
++        Mutex::Autolock _l(mInflightLock);
++        ALOGE("%s: HAL process_capture_request call failed!", __FUNCTION__);
++
++        cleanupInflightFences(allFences, numBufs);
++        if (hasInputBuf) {
++            auto key = std::make_pair(request.inputBuffer.streamId, request.frameNumber);
++            mInflightBuffers.erase(key);
++        }
++        for (size_t i = 0; i < numOutputBufs; i++) {
++            auto key = std::make_pair(request.outputBuffers[i].streamId, request.frameNumber);
++            mInflightBuffers.erase(key);
++        }
++        if (aeCancelTriggerNeeded) {
++            mInflightAETriggerOverrides.erase(request.frameNumber);
++        }
++        return Status::INTERNAL_ERROR;
++    }
++
++    mFirstRequest = false;
++    return Status::OK;
++}
++
++ScopedAStatus LibcameraDeviceSession::flush()  {
++    Status status = initStatus();
++    if (status == Status::OK) {
++        // Flush is always supported on device 3.1 or later
++        status_t ret = mDevice->ops->flush(mDevice);
++        if (ret != OK) {
++            status = Status::INTERNAL_ERROR;
++        }
++    }
++    return fromStatus(status);
++}
++
++ScopedAStatus LibcameraDeviceSession::close()  {
++    Mutex::Autolock _l(mStateLock);
++    if (!mClosed) {
++        {
++            Mutex::Autolock _l(mInflightLock);
++            if (!mInflightBuffers.empty()) {
++                ALOGE("%s: trying to close while there are still %zu inflight buffers!",
++                        __FUNCTION__, mInflightBuffers.size());
++            }
++            if (!mInflightAETriggerOverrides.empty()) {
++                ALOGE("%s: trying to close while there are still %zu inflight "
++                        "trigger overrides!", __FUNCTION__,
++                        mInflightAETriggerOverrides.size());
++            }
++            if (!mInflightRawBoostPresent.empty()) {
++                ALOGE("%s: trying to close while there are still %zu inflight "
++                        " RAW boost overrides!", __FUNCTION__,
++                        mInflightRawBoostPresent.size());
++            }
++
++        }
++
++        ATRACE_BEGIN("camera3->close");
++        mDevice->common.close(&mDevice->common);
++        ATRACE_END();
++
++        // free all imported buffers
++        Mutex::Autolock _l(mInflightLock);
++        for(auto& pair : mCirculatingBuffers) {
++            CirculatingBuffers& buffers = pair.second;
++            for (auto& p2 : buffers) {
++                sHandleImporter.freeBuffer(p2.second);
++            }
++            buffers.clear();
++        }
++        mCirculatingBuffers.clear();
++
++        mClosed = true;
++    }
++    return fromStatus(Status::OK);
++}
++
++uint64_t LibcameraDeviceSession::getCapResultBufferId(const buffer_handle_t&, int) {
++    // No need to fill in bufferId by default
++    return BUFFER_ID_NO_BUFFER;
++}
++
++status_t LibcameraDeviceSession::constructCaptureResult(CaptureResult& result,
++                                                 const camera3_capture_result *hal_result) {
++    uint32_t frameNumber = hal_result->frame_number;
++    bool hasInputBuf = (hal_result->input_buffer != nullptr);
++    size_t numOutputBufs = hal_result->num_output_buffers;
++    size_t numBufs = numOutputBufs + (hasInputBuf ? 1 : 0);
++    if (numBufs > 0) {
++        Mutex::Autolock _l(mInflightLock);
++        if (hasInputBuf) {
++            int streamId = static_cast<Camera3Stream*>(hal_result->input_buffer->stream)->mId;
++            // validate if buffer is inflight
++            auto key = std::make_pair(streamId, frameNumber);
++            if (mInflightBuffers.count(key) != 1) {
++                ALOGE("%s: input buffer for stream %d frame %d is not inflight!",
++                        __FUNCTION__, streamId, frameNumber);
++                return -EINVAL;
++            }
++        }
++
++        for (size_t i = 0; i < numOutputBufs; i++) {
++            int streamId = static_cast<Camera3Stream*>(hal_result->output_buffers[i].stream)->mId;
++            // validate if buffer is inflight
++            auto key = std::make_pair(streamId, frameNumber);
++            if (mInflightBuffers.count(key) != 1) {
++                ALOGE("%s: output buffer for stream %d frame %d is not inflight!",
++                        __FUNCTION__, streamId, frameNumber);
++                return -EINVAL;
++            }
++        }
++    }
++    // We don't need to validate/import fences here since we will be passing them to camera service
++    // within the scope of this function
++    result.frameNumber = frameNumber;
++    result.fmqResultSize = 0;
++    result.partialResult = hal_result->partial_result;
++    convertToAidl(hal_result->result, &result.result);
++    if (nullptr != hal_result->result) {
++        bool resultOverriden = false;
++        Mutex::Autolock _l(mInflightLock);
++
++        // Derive some new keys for backward compatibility
++        if (mDerivePostRawSensKey) {
++            camera_metadata_ro_entry entry;
++            if (find_camera_metadata_ro_entry(hal_result->result,
++                    ANDROID_CONTROL_POST_RAW_SENSITIVITY_BOOST, &entry) == 0) {
++                mInflightRawBoostPresent[frameNumber] = true;
++            } else {
++                auto entry = mInflightRawBoostPresent.find(frameNumber);
++                if (mInflightRawBoostPresent.end() == entry) {
++                    mInflightRawBoostPresent[frameNumber] = false;
++                }
++            }
++
++            if ((hal_result->partial_result == mNumPartialResults)) {
++                if (!mInflightRawBoostPresent[frameNumber]) {
++                    if (!resultOverriden) {
++                        mOverridenResult.clear();
++                        mOverridenResult.append(hal_result->result);
++                        resultOverriden = true;
++                    }
++                    int32_t defaultBoost[1] = {100};
++                    mOverridenResult.update(
++                            ANDROID_CONTROL_POST_RAW_SENSITIVITY_BOOST,
++                            defaultBoost, 1);
++                }
++
++                mInflightRawBoostPresent.erase(frameNumber);
++            }
++        }
++
++        auto entry = mInflightAETriggerOverrides.find(frameNumber);
++        if (mInflightAETriggerOverrides.end() != entry) {
++            if (!resultOverriden) {
++                mOverridenResult.clear();
++                mOverridenResult.append(hal_result->result);
++                resultOverriden = true;
++            }
++            overrideResultForPrecaptureCancelLocked(entry->second,
++                    &mOverridenResult);
++            if (hal_result->partial_result == mNumPartialResults) {
++                mInflightAETriggerOverrides.erase(frameNumber);
++            }
++        }
++
++        if (resultOverriden) {
++            const camera_metadata_t *metaBuffer =
++                    mOverridenResult.getAndLock();
++            convertToAidl(metaBuffer, &result.result);
++            mOverridenResult.unlock(metaBuffer);
++        }
++    }
++    if (hasInputBuf) {
++        result.inputBuffer.streamId =
++                static_cast<Camera3Stream*>(hal_result->input_buffer->stream)->mId;
++        result.inputBuffer.buffer = NativeHandle();
++        result.inputBuffer.status = (BufferStatus) hal_result->input_buffer->status;
++        // skip acquire fence since it's no use to camera service
++        if (hal_result->input_buffer->release_fence != -1) {
++            native_handle_t* handle = native_handle_create(/*numFds*/1, /*numInts*/0);
++            handle->data[0] = hal_result->input_buffer->release_fence;
++            result.inputBuffer.releaseFence = android::dupToAidl(handle);
++            native_handle_delete(handle);
++        } else {
++            result.inputBuffer.releaseFence = NativeHandle();
++        }
++    } else {
++        result.inputBuffer.streamId = -1;
++    }
++
++    result.outputBuffers.resize(numOutputBufs);
++    for (size_t i = 0; i < numOutputBufs; i++) {
++        result.outputBuffers[i].streamId =
++                static_cast<Camera3Stream*>(hal_result->output_buffers[i].stream)->mId;
++        result.outputBuffers[i].buffer = NativeHandle();
++        if (hal_result->output_buffers[i].buffer != nullptr) {
++            result.outputBuffers[i].bufferId = getCapResultBufferId(
++                    *(hal_result->output_buffers[i].buffer),
++                    result.outputBuffers[i].streamId);
++        } else {
++            result.outputBuffers[i].bufferId = 0;
++        }
++
++        result.outputBuffers[i].status = (BufferStatus) hal_result->output_buffers[i].status;
++        // skip acquire fence since it's of no use to camera service
++        if (hal_result->output_buffers[i].release_fence != -1) {
++            native_handle_t* handle = native_handle_create(/*numFds*/1, /*numInts*/0);
++            handle->data[0] = hal_result->output_buffers[i].release_fence;
++            result.outputBuffers[i].releaseFence = android::dupToAidl(handle);
++            native_handle_delete(handle);
++        } else {
++            result.outputBuffers[i].releaseFence = NativeHandle();
++        }
++    }
++
++    // Free inflight record/fences.
++    // Do this before call back to camera service because camera service might jump to
++    // configure_streams right after the processCaptureResult call so we need to finish
++    // updating inflight queues first
++    if (numBufs > 0) {
++        Mutex::Autolock _l(mInflightLock);
++        if (hasInputBuf) {
++            int streamId = static_cast<Camera3Stream*>(hal_result->input_buffer->stream)->mId;
++            auto key = std::make_pair(streamId, frameNumber);
++            mInflightBuffers.erase(key);
++        }
++
++        for (size_t i = 0; i < numOutputBufs; i++) {
++            int streamId = static_cast<Camera3Stream*>(hal_result->output_buffers[i].stream)->mId;
++            auto key = std::make_pair(streamId, frameNumber);
++            mInflightBuffers.erase(key);
++        }
++
++        if (mInflightBuffers.empty()) {
++            ALOGV("%s: inflight buffer queue is now empty!", __FUNCTION__);
++        }
++    }
++    return OK;
++}
++
++// Static helper method to copy/shrink capture result metadata sent by HAL
++void LibcameraDeviceSession::sShrinkCaptureResult(
++        camera3_capture_result* dst, const camera3_capture_result* src,
++        std::vector<::android::hardware::camera::common::V1_0::helper::CameraMetadata>* mds,
++        std::vector<const camera_metadata_t*>* physCamMdArray,
++        bool handlePhysCam) {
++    *dst = *src;
++    // Reserve maximum number of entries to avoid metadata re-allocation.
++    mds->reserve(1 + (handlePhysCam ? src->num_physcam_metadata : 0));
++    if (sShouldShrink(src->result)) {
++        mds->emplace_back(sCreateCompactCopy(src->result));
++        dst->result = mds->back().getAndLock();
++    }
++
++    if (handlePhysCam) {
++        // First determine if we need to create new camera_metadata_t* array
++        bool needShrink = false;
++        for (uint32_t i = 0; i < src->num_physcam_metadata; i++) {
++            if (sShouldShrink(src->physcam_metadata[i])) {
++                needShrink = true;
++            }
++        }
++
++        if (!needShrink) return;
++
++        physCamMdArray->reserve(src->num_physcam_metadata);
++        dst->physcam_metadata = physCamMdArray->data();
++        for (uint32_t i = 0; i < src->num_physcam_metadata; i++) {
++            if (sShouldShrink(src->physcam_metadata[i])) {
++                mds->emplace_back(sCreateCompactCopy(src->physcam_metadata[i]));
++                dst->physcam_metadata[i] = mds->back().getAndLock();
++            } else {
++                dst->physcam_metadata[i] = src->physcam_metadata[i];
++            }
++        }
++    }
++}
++
++bool LibcameraDeviceSession::sShouldShrink(const camera_metadata_t* md) {
++    size_t compactSize = get_camera_metadata_compact_size(md);
++    size_t totalSize = get_camera_metadata_size(md);
++    if (totalSize >= compactSize + METADATA_SHRINK_ABS_THRESHOLD &&
++            totalSize >= compactSize * METADATA_SHRINK_REL_THRESHOLD) {
++        ALOGV("Camera metadata should be shrunk from %zu to %zu", totalSize, compactSize);
++        return true;
++    }
++    return false;
++}
++
++camera_metadata_t* LibcameraDeviceSession::sCreateCompactCopy(const camera_metadata_t* src) {
++    size_t compactSize = get_camera_metadata_compact_size(src);
++    void* buffer = calloc(1, compactSize);
++    if (buffer == nullptr) {
++        ALOGE("%s: Allocating %zu bytes failed", __FUNCTION__, compactSize);
++    }
++    return copy_camera_metadata(buffer, compactSize, src);
++}
++
++/**
++ * Static callback forwarding methods from HAL to instance
++ */
++void LibcameraDeviceSession::sProcessCaptureResult(
++        const camera3_callback_ops *cb,
++        const camera3_capture_result *hal_result) {
++    LibcameraDeviceSession *d =
++            const_cast<LibcameraDeviceSession*>(static_cast<const LibcameraDeviceSession*>(cb));
++
++    CaptureResult result = {};
++    camera3_capture_result shadowResult;
++    bool handlePhysCam = (d->mDeviceVersion >= CAMERA_DEVICE_API_VERSION_3_5);
++    std::vector<::android::hardware::camera::common::V1_0::helper::CameraMetadata> compactMds;
++    std::vector<const camera_metadata_t*> physCamMdArray;
++    sShrinkCaptureResult(&shadowResult, hal_result, &compactMds, &physCamMdArray, handlePhysCam);
++
++    status_t ret = d->constructCaptureResult(result, &shadowResult);
++    if (ret == OK) {
++        d->mResultBatcher.processCaptureResult(result);
++    }
++}
++
++void LibcameraDeviceSession::sNotify(
++        const camera3_callback_ops *cb,
++        const camera3_notify_msg *msg) {
++    LibcameraDeviceSession *d =
++            const_cast<LibcameraDeviceSession*>(static_cast<const LibcameraDeviceSession*>(cb));
++    NotifyMsg aidlMsg;
++    convertToAidl(msg, &aidlMsg);
++
++    if (aidlMsg.getTag() == NotifyMsg::Tag::error) {
++        auto errorMsg = aidlMsg.get<NotifyMsg::Tag::error>();
++        if (errorMsg.errorStreamId != -1) {
++            if (d->mStreamMap.count(errorMsg.errorStreamId) != 1) {
++                ALOGE("%s: unknown stream ID %d reports an error!",
++                        __FUNCTION__, errorMsg.errorStreamId);
++                return;
++            }
++        }
++    }
++
++    if (aidlMsg.getTag() == NotifyMsg::Tag::error) {
++        auto errorMsg = aidlMsg.get<NotifyMsg::Tag::error>();
++        switch (errorMsg.errorCode) {
++            case ErrorCode::ERROR_DEVICE:
++            case ErrorCode::ERROR_REQUEST:
++            case ErrorCode::ERROR_RESULT: {
++                Mutex::Autolock _l(d->mInflightLock);
++                auto entry = d->mInflightAETriggerOverrides.find(
++                        errorMsg.frameNumber);
++                if (d->mInflightAETriggerOverrides.end() != entry) {
++                    d->mInflightAETriggerOverrides.erase(
++                            errorMsg.frameNumber);
++                }
++
++                auto boostEntry = d->mInflightRawBoostPresent.find(
++                        errorMsg.frameNumber);
++                if (d->mInflightRawBoostPresent.end() != boostEntry) {
++                    d->mInflightRawBoostPresent.erase(
++                            errorMsg.frameNumber);
++                }
++
++            }
++                break;
++            case ErrorCode::ERROR_BUFFER:
++            default:
++                break;
++        }
++
++    }
++
++    d->mResultBatcher.notify(aidlMsg);
++}
++
++ScopedAStatus LibcameraDeviceSession::isReconfigurationRequired(
++        const CameraMetadata& in_oldSessionParams, const CameraMetadata& in_newSessionParams,
++        bool* _aidl_return) {
++    ALOGI("%s()", __func__);
++    *_aidl_return = false;
++    return fromStatus(Status::INTERNAL_ERROR);
++}
++ScopedAStatus LibcameraDeviceSession::signalStreamFlush(const std::vector<int32_t>& in_streamIds,
++                                                        int32_t in_streamConfigCounter) {
++    ALOGI("%s()", __func__);
++    return fromStatus(Status::INTERNAL_ERROR);
++}
++ScopedAStatus LibcameraDeviceSession::switchToOffline(
++        const std::vector<int32_t>& in_streamsToKeep,
++        CameraOfflineSessionInfo* out_offlineSessionInfo,
++        std::shared_ptr<ICameraOfflineSession>* _aidl_return) {
++    ALOGI("%s()", __func__);
++    *_aidl_return = nullptr;
++    return fromStatus(Status::INTERNAL_ERROR);
++}
++ScopedAStatus LibcameraDeviceSession::repeatingRequestEnd(
++        int32_t in_frameNumber, const std::vector<int32_t>& in_streamIds) {
++    ALOGI("%s()", __func__);
++    return fromStatus(Status::INTERNAL_ERROR);
++}
++
++} // namespace implementation
++}  // namespace device
++}  // namespace camera
++}  // namespace hardware
++}  // namespace android
+diff --git a/src/android/hal/device/LibcameraDeviceSession.h b/src/android/hal/device/LibcameraDeviceSession.h
+new file mode 100644
+index 000000000..8d64ca336
+--- /dev/null
++++ b/src/android/hal/device/LibcameraDeviceSession.h
+@@ -0,0 +1,381 @@
++/*
++ * Copyright (C) 2016 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef ANDROID_HARDWARE_CAMERA_DEVICE_V3_2_CAMERADEVICE3SESSION_H
++#define ANDROID_HARDWARE_CAMERA_DEVICE_V3_2_CAMERADEVICE3SESSION_H
++
++#include <aidl/android/hardware/camera/common/Status.h>
++#include <aidl/android/hardware/camera/device/BnCameraDeviceSession.h>
++#include <aidl/android/hardware/camera/device/BufferRequest.h>
++#include <aidl/android/hardware/camera/device/Stream.h>
++#include <fmq/AidlMessageQueue.h>
++
++#include "convert.h"
++
++#include <deque>
++#include <map>
++#include <unordered_map>
++#include "CameraMetadata.h"
++#include "HandleImporter.h"
++#include "hardware/camera3.h"
++#include "hardware/camera_common.h"
++#include "utils/Mutex.h"
++
++namespace android {
++namespace hardware {
++namespace camera {
++namespace device {
++namespace implementation {
++
++using ::aidl::android::hardware::camera::common::Status;
++using ::aidl::android::hardware::camera::device::BnCameraDeviceSession;
++using ::aidl::android::hardware::camera::device::BufferCache;
++using ::aidl::android::hardware::camera::device::BufferRequest;
++using ::aidl::android::hardware::camera::device::CameraMetadata;
++using ::aidl::android::hardware::camera::device::CameraOfflineSessionInfo;
++using ::aidl::android::hardware::camera::device::CaptureRequest;
++using ::aidl::android::hardware::camera::device::CaptureResult;
++using ::aidl::android::hardware::camera::device::HalStream;
++using ::aidl::android::hardware::camera::device::ICameraDeviceCallback;
++using ::aidl::android::hardware::camera::device::ICameraOfflineSession;
++using ::aidl::android::hardware::camera::device::RequestTemplate;
++using ::aidl::android::hardware::camera::device::Stream;
++using ::aidl::android::hardware::camera::device::StreamBuffer;
++using ::aidl::android::hardware::camera::device::StreamConfiguration;
++using ::aidl::android::hardware::common::fmq::MQDescriptor;
++using ::aidl::android::hardware::common::fmq::SynchronizedReadWrite;
++using ::android::AidlMessageQueue;
++using ::android::Mutex;
++using ::ndk::ScopedAStatus;
++
++struct Camera3Stream;
++
++/**
++ * Function pointer types with C calling convention to
++ * use for HAL callback functions.
++ */
++extern "C" {
++    typedef void (callbacks_process_capture_result_t)(
++        const struct camera3_callback_ops *,
++        const camera3_capture_result_t *);
++
++    typedef void (callbacks_notify_t)(
++        const struct camera3_callback_ops *,
++        const camera3_notify_msg_t *);
++}
++
++struct LibcameraDeviceSession : public BnCameraDeviceSession, protected camera3_callback_ops  {
++
++    LibcameraDeviceSession(camera3_device_t*,
++                        const camera_metadata_t* deviceInfo,
++                        const std::shared_ptr<ICameraDeviceCallback>&);
++    virtual ~LibcameraDeviceSession();
++    // Call by CameraDevice to dump active device states
++    void dumpState(const native_handle_t* fd);
++    // Caller must use this method to check if LibcameraDeviceSession ctor failed
++    bool isInitFailed() { return mInitFail; }
++    // Used by CameraDevice to signal external camera disconnected
++    void disconnect();
++    bool isClosed();
++
++protected:
++
++    ScopedAStatus constructDefaultRequestSettings(RequestTemplate in_type,
++                                                  CameraMetadata* _aidl_return) override;
++    ScopedAStatus configureStreams(const StreamConfiguration& in_requestedConfiguration,
++                                   std::vector<HalStream>* _aidl_return) override;
++    ScopedAStatus getCaptureRequestMetadataQueue(
++            MQDescriptor<int8_t, SynchronizedReadWrite>* _aidl_return) override;
++    ScopedAStatus getCaptureResultMetadataQueue(
++            MQDescriptor<int8_t, SynchronizedReadWrite>* _aidl_return) override;
++    ScopedAStatus processCaptureRequest(const std::vector<CaptureRequest>& in_requests,
++                                        const std::vector<BufferCache>& in_cachesToRemove,
++                                        int32_t* _aidl_return) override;
++    ScopedAStatus flush() override;
++    ScopedAStatus close() override;
++
++    // Missing methods from AIDL: stubs
++    ScopedAStatus isReconfigurationRequired(const CameraMetadata& in_oldSessionParams,
++                                            const CameraMetadata& in_newSessionParams,
++                                            bool* _aidl_return) override;
++    ScopedAStatus signalStreamFlush(const std::vector<int32_t>& in_streamIds,
++                                    int32_t in_streamConfigCounter) override;
++    ScopedAStatus switchToOffline(const std::vector<int32_t>& in_streamsToKeep,
++                                  CameraOfflineSessionInfo* out_offlineSessionInfo,
++                                  std::shared_ptr<ICameraOfflineSession>* _aidl_return) override;
++    ScopedAStatus repeatingRequestEnd(int32_t in_frameNumber,
++                                      const std::vector<int32_t>& in_streamIds) override;
++
++    // Helper methods
++    Status constructDefaultRequestSettingsRaw(int type, CameraMetadata *outMetadata);
++
++    bool preProcessConfigurationLocked(const StreamConfiguration& requestedConfiguration,
++            camera3_stream_configuration_t *stream_list /*out*/,
++            std::vector<camera3_stream_t*> *streams /*out*/);
++    void postProcessConfigurationLocked(const StreamConfiguration& requestedConfiguration);
++
++    void postProcessConfigurationFailureLocked(const StreamConfiguration& requestedConfiguration);
++
++protected:
++
++    // protecting mClosed/mDisconnected/mInitFail
++    mutable Mutex mStateLock;
++    // device is closed either
++    //    - closed by user
++    //    - init failed
++    //    - camera disconnected
++    bool mClosed = false;
++
++    // Set by CameraDevice (when external camera is disconnected)
++    bool mDisconnected = false;
++
++    struct AETriggerCancelOverride {
++        bool applyAeLock;
++        uint8_t aeLock;
++        bool applyAePrecaptureTrigger;
++        uint8_t aePrecaptureTrigger;
++    };
++
++    camera3_device_t* mDevice;
++    const uint32_t mDeviceVersion;
++    const bool mFreeBufEarly;
++    bool mIsAELockAvailable;
++    bool mDerivePostRawSensKey;
++    uint32_t mNumPartialResults;
++    // Stream ID -> Camera3Stream cache
++    std::map<int, Camera3Stream> mStreamMap;
++
++    mutable Mutex mInflightLock; // protecting mInflightBuffers and mCirculatingBuffers
++    // (streamID, frameNumber) -> inflight buffer cache
++    std::map<std::pair<int, uint32_t>, camera3_stream_buffer_t>  mInflightBuffers;
++
++    // (frameNumber, AETriggerOverride) -> inflight request AETriggerOverrides
++    std::map<uint32_t, AETriggerCancelOverride> mInflightAETriggerOverrides;
++    ::android::hardware::camera::common::helper::CameraMetadata mOverridenResult;
++    std::map<uint32_t, bool> mInflightRawBoostPresent;
++    ::android::hardware::camera::common::helper::CameraMetadata mOverridenRequest;
++
++    static const uint64_t BUFFER_ID_NO_BUFFER = 0;
++    // buffers currently ciculating between HAL and camera service
++    // key: bufferId sent via HIDL interface
++    // value: imported buffer_handle_t
++    // Buffer will be imported during process_capture_request and will be freed
++    // when the its stream is deleted or camera device session is closed
++    typedef std::unordered_map<uint64_t, buffer_handle_t> CirculatingBuffers;
++    // Stream ID -> circulating buffers map
++    std::map<int, CirculatingBuffers> mCirculatingBuffers;
++
++    static common::helper::HandleImporter sHandleImporter;
++    static buffer_handle_t sEmptyBuffer;
++
++    bool mInitFail;
++    bool mFirstRequest = false;
++
++    common::helper::CameraMetadata mDeviceInfo;
++
++    using RequestMetadataQueue = AidlMessageQueue<int8_t, SynchronizedReadWrite>;
++    std::unique_ptr<RequestMetadataQueue> mRequestMetadataQueue;
++    using ResultMetadataQueue = AidlMessageQueue<int8_t, SynchronizedReadWrite>;
++    std::shared_ptr<ResultMetadataQueue> mResultMetadataQueue;
++
++    class ResultBatcher {
++    public:
++        ResultBatcher(const std::shared_ptr<ICameraDeviceCallback>& callback);
++        void setNumPartialResults(uint32_t n);
++        void setBatchedStreams(const std::vector<int>& streamsToBatch);
++        void setResultMetadataQueue(std::shared_ptr<ResultMetadataQueue> q);
++
++        void registerBatch(uint32_t frameNumber, uint32_t batchSize);
++        void notify(NotifyMsg& msg);
++        void processCaptureResult(CaptureResult& result);
++
++    protected:
++        struct InflightBatch {
++            // Protect access to entire struct. Acquire this lock before read/write any data or
++            // calling any methods. processCaptureResult and notify will compete for this lock
++            // HIDL IPCs might be issued while the lock is held
++            Mutex mLock;
++
++            bool allDelivered() const;
++
++            uint32_t mFirstFrame;
++            uint32_t mLastFrame;
++            uint32_t mBatchSize;
++
++            bool mShutterDelivered = false;
++            std::vector<NotifyMsg> mShutterMsgs;
++
++            struct BufferBatch {
++                BufferBatch(uint32_t batchSize) {
++                    mBuffers.reserve(batchSize);
++                }
++                bool mDelivered = false;
++                // This currently assumes every batched request will output to the batched stream
++                // and since HAL must always send buffers in order, no frameNumber tracking is
++                // needed
++                std::vector<StreamBuffer> mBuffers;
++            };
++            // Stream ID -> VideoBatch
++            std::unordered_map<int, BufferBatch> mBatchBufs;
++
++            struct MetadataBatch {
++                //                   (frameNumber, metadata)
++                std::vector<std::pair<uint32_t, CameraMetadata>> mMds;
++            };
++            // Partial result IDs that has been delivered to framework
++            uint32_t mNumPartialResults;
++            uint32_t mPartialResultProgress = 0;
++            // partialResult -> MetadataBatch
++            std::map<uint32_t, MetadataBatch> mResultMds;
++
++            // Set to true when batch is removed from mInflightBatches
++            // processCaptureResult and notify must check this flag after acquiring mLock to make
++            // sure this batch isn't removed while waiting for mLock
++            bool mRemoved = false;
++        };
++
++
++        // Get the batch index and pointer to InflightBatch (nullptrt if the frame is not batched)
++        // Caller must acquire the InflightBatch::mLock before accessing the InflightBatch
++        // It's possible that the InflightBatch is removed from mInflightBatches before the
++        // InflightBatch::mLock is acquired (most likely caused by an error notification), so
++        // caller must check InflightBatch::mRemoved flag after the lock is acquried.
++        // This method will hold ResultBatcher::mLock briefly
++        std::pair<int, std::shared_ptr<InflightBatch>> getBatch(uint32_t frameNumber);
++
++        static const int NOT_BATCHED = -1;
++
++        // move/push function avoids "hidl_handle& operator=(hidl_handle&)", which clones native
++        // handle
++        void moveStreamBuffer(StreamBuffer&& src, StreamBuffer& dst);
++        void pushStreamBuffer(StreamBuffer&& src, std::vector<StreamBuffer>& dst);
++
++        void sendBatchMetadataLocked(
++                std::shared_ptr<InflightBatch> batch, uint32_t lastPartialResultIdx);
++
++        // Check if the first batch in mInflightBatches is ready to be removed, and remove it if so
++        // This method will hold ResultBatcher::mLock briefly
++        void checkAndRemoveFirstBatch();
++
++        // The following sendXXXX methods must be called while the InflightBatch::mLock is locked
++        // HIDL IPC methods will be called during these methods.
++        void sendBatchShutterCbsLocked(std::shared_ptr<InflightBatch> batch);
++        // send buffers for all batched streams
++        void sendBatchBuffersLocked(std::shared_ptr<InflightBatch> batch);
++        // send buffers for specified streams
++        void sendBatchBuffersLocked(
++                std::shared_ptr<InflightBatch> batch, const std::vector<int>& streams);
++       // End of sendXXXX methods
++
++        // helper methods
++        void freeReleaseFences(std::vector<CaptureResult>&);
++        void notifySingleMsg(NotifyMsg& msg);
++        void processOneCaptureResult(CaptureResult& result);
++        void invokeProcessCaptureResultCallback(std::vector<CaptureResult> &results, bool tryWriteFmq);
++
++        // Protect access to mInflightBatches, mNumPartialResults and mStreamsToBatch
++        // processCaptureRequest, processCaptureResult, notify will compete for this lock
++        // Do NOT issue HIDL IPCs while holding this lock (except when HAL reports error)
++        mutable Mutex mLock;
++        std::deque<std::shared_ptr<InflightBatch>> mInflightBatches;
++        uint32_t mNumPartialResults;
++        std::vector<int> mStreamsToBatch;
++        const std::shared_ptr<ICameraDeviceCallback> mCallback;
++        std::shared_ptr<ResultMetadataQueue> mResultMetadataQueue;
++
++        // Protect against invokeProcessCaptureResultCallback()
++        Mutex mProcessCaptureResultLock;
++
++    } mResultBatcher;
++
++    std::vector<int> mVideoStreamIds;
++
++    bool initialize();
++
++    static bool shouldFreeBufEarly();
++
++    Status initStatus() const;
++
++    // Validate and import request's input buffer and acquire fence
++    virtual Status importRequest(
++            const CaptureRequest& request,
++            std::vector<buffer_handle_t*>& allBufPtrs,
++            std::vector<int>& allFences);
++
++    Status importRequestImpl(
++            const CaptureRequest& request,
++            std::vector<buffer_handle_t*>& allBufPtrs,
++            std::vector<int>& allFences,
++            // Optional argument for BnCameraDeviceSession@3.5 impl
++            bool allowEmptyBuf = false);
++
++    Status importBuffer(int32_t streamId,
++            uint64_t bufId, buffer_handle_t buf,
++            /*out*/buffer_handle_t** outBufPtr,
++            bool allowEmptyBuf);
++
++    static void cleanupInflightFences(
++            std::vector<int>& allFences, size_t numFences);
++
++    void cleanupBuffersLocked(int id);
++
++    void updateBufferCaches(const std::vector<BufferCache>& cachesToRemove);
++
++    android_dataspace mapToLegacyDataspace(
++            android_dataspace dataSpace) const;
++
++    bool handleAePrecaptureCancelRequestLocked(
++            const camera3_capture_request_t &halRequest,
++            android::hardware::camera::common::V1_0::helper::CameraMetadata *settings /*out*/,
++            AETriggerCancelOverride *override /*out*/);
++
++    void overrideResultForPrecaptureCancelLocked(
++            const AETriggerCancelOverride &aeTriggerCancelOverride,
++            ::android::hardware::camera::common::V1_0::helper::CameraMetadata *settings /*out*/);
++
++    Status processOneCaptureRequest(const CaptureRequest& request);
++    /**
++     * Static callback forwarding methods from HAL to instance
++     */
++    static callbacks_process_capture_result_t sProcessCaptureResult;
++    static callbacks_notify_t sNotify;
++
++    // By default camera service uses frameNumber/streamId pair to retrieve the buffer that
++    // was sent to HAL. Override this implementation if HAL is using buffers from buffer management
++    // APIs to send output buffer.
++    virtual uint64_t getCapResultBufferId(const buffer_handle_t& buf, int streamId);
++
++    status_t constructCaptureResult(CaptureResult& result,
++                                const camera3_capture_result *hal_result);
++
++    // Static helper method to copy/shrink capture result metadata sent by HAL
++    // Temporarily allocated metadata copy will be hold in mds
++    static void sShrinkCaptureResult(
++            camera3_capture_result* dst, const camera3_capture_result* src,
++            std::vector<::android::hardware::camera::common::V1_0::helper::CameraMetadata>* mds,
++            std::vector<const camera_metadata_t*>* physCamMdArray,
++            bool handlePhysCam);
++    static bool sShouldShrink(const camera_metadata_t* md);
++    static camera_metadata_t* sCreateCompactCopy(const camera_metadata_t* src);
++};
++
++}  // namespace implementation
++}  // namespace device
++}  // namespace camera
++}  // namespace hardware
++}  // namespace android
++
++#endif  // ANDROID_HARDWARE_CAMERA_DEVICE_V3_2_CAMERADEVICE3SESSION_H
+diff --git a/src/android/hal/device/convert.cpp b/src/android/hal/device/convert.cpp
+new file mode 100644
+index 000000000..d6cb1b20d
+--- /dev/null
++++ b/src/android/hal/device/convert.cpp
+@@ -0,0 +1,169 @@
++/*
++ * Copyright (C) 2022 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#define LOG_TAG "LibcameraDevice"
++#include <log/log.h>
++
++#include "convert.h"
++
++#include <aidl/android/hardware/graphics/common/BufferUsage.h>
++#include <aidl/android/hardware/graphics/common/PixelFormat.h>
++#include <hardware/camera_common.h>
++
++namespace android {
++namespace hardware {
++namespace camera {
++namespace device {
++namespace implementation {
++
++using ::aidl::android::hardware::camera::device::ErrorCode;
++using ::aidl::android::hardware::camera::device::ErrorMsg;
++using ::aidl::android::hardware::camera::device::ShutterMsg;
++using ::aidl::android::hardware::graphics::common::BufferUsage;
++using ::aidl::android::hardware::graphics::common::PixelFormat;
++
++Status getAidlStatus(int status) {
++    switch (status) {
++        case 0: return Status::OK;
++        case -ENOSYS: return Status::OPERATION_NOT_SUPPORTED;
++        case -EBUSY : return Status::CAMERA_IN_USE;
++        case -EUSERS: return Status::MAX_CAMERAS_IN_USE;
++        case -ENODEV: return Status::INTERNAL_ERROR;
++        case -EINVAL: return Status::ILLEGAL_ARGUMENT;
++        default:
++            ALOGE("%s: unknown HAL status code %d", __FUNCTION__, status);
++            return Status::INTERNAL_ERROR;
++    }
++}
++
++void convertToAidl(const camera_metadata_t* src, CameraMetadata* dest) {
++    if (src == nullptr) {
++        return;
++    }
++
++    size_t size = get_camera_metadata_size(src);
++    auto* src_start = (uint8_t*)src;
++    uint8_t* src_end = src_start + size;
++    dest->metadata.assign(src_start, src_end);
++}
++
++bool convertFromAidl(const CameraMetadata& src, const camera_metadata_t** dst) {
++    const std::vector<uint8_t>& metadata = src.metadata;
++    if (metadata.empty()) {
++        // Special case for null metadata
++        *dst = nullptr;
++        return true;
++    }
++
++    const uint8_t* data = metadata.data();
++    // check that the size of CameraMetadata match underlying camera_metadata_t
++    if (get_camera_metadata_size((camera_metadata_t*)data) != metadata.size()) {
++        ALOGE("%s: input CameraMetadata is corrupt!", __FUNCTION__);
++        return false;
++    }
++    *dst = (camera_metadata_t*)data;
++    return true;
++}
++
++void convertFromAidl(const Stream& src, camera_stream_t* dst) {
++    dst->stream_type = static_cast<int>(src.streamType);
++    dst->width = src.width;
++    dst->height = src.height;
++    dst->format = static_cast<int>(src.format);
++    dst->data_space = static_cast<android_dataspace_t>(src.dataSpace);
++    dst->usage = static_cast<uint32_t>(src.usage);
++    dst->physical_camera_id = src.physicalCameraId.c_str();
++    dst->rotation = static_cast<int>(src.rotation);
++}
++
++void convertFromAidl(const Stream &src, Camera3Stream* dst) {
++    dst->mId = src.id;
++    dst->stream_type = static_cast<int>(src.streamType);
++    dst->width = src.width;
++    dst->height = src.height;
++    dst->format = static_cast<int>(src.format);
++    dst->data_space = static_cast<android_dataspace_t>(src.dataSpace);
++    dst->usage = static_cast<uint32_t>(src.usage);
++    dst->physical_camera_id = src.physicalCameraId.c_str();
++    dst->rotation = static_cast<int>(src.rotation);
++    // Fields to be filled by HAL (max_buffers, priv) are initialized to 0
++    dst->max_buffers = 0;
++    dst->priv = 0;
++}
++
++void convertToAidl(const Camera3Stream* src, HalStream* dst) {
++    dst->id = src->mId;
++    dst->overrideFormat = (PixelFormat) src->format;
++    dst->maxBuffers = src->max_buffers;
++    if (src->stream_type == CAMERA3_STREAM_OUTPUT) {
++        dst->consumerUsage = (BufferUsage)0;
++        dst->producerUsage = (BufferUsage)src->usage;
++    } else if (src->stream_type == CAMERA3_STREAM_INPUT) {
++        dst->producerUsage = (BufferUsage)0;
++        dst->consumerUsage = (BufferUsage)src->usage;
++    } else {
++        //Should not reach here per current HIDL spec, but we might end up adding
++        // bi-directional stream to HIDL.
++        ALOGW("%s: Stream type %d is not currently supported!",
++                __FUNCTION__, src->stream_type);
++    }
++}
++
++void convertFromAidl(
++        buffer_handle_t* bufPtr, BufferStatus status, camera3_stream_t* stream, int acquireFence,
++        camera3_stream_buffer_t* dst) {
++    dst->stream = stream;
++    dst->buffer = bufPtr;
++    dst->status = (int) status;
++    dst->acquire_fence = acquireFence;
++    dst->release_fence = -1; // meant for HAL to fill in
++}
++
++void convertToAidl(const camera3_notify_msg* src, NotifyMsg* dst) {
++    switch (src->type) {
++        case CAMERA3_MSG_ERROR:
++            {
++                // The camera3_stream_t* must be the same as what wrapper HAL passed to conventional
++                // HAL, or the ID lookup will return garbage. Caller should validate the ID here is
++                // indeed one of active stream IDs
++                Camera3Stream* stream = static_cast<Camera3Stream*>(
++                        src->message.error.error_stream);
++                aidl::android::hardware::camera::device::ErrorMsg errorMsg = {
++                    .frameNumber = static_cast<int32_t>(src->message.error.frame_number),
++                    .errorStreamId = (stream != nullptr) ? stream->mId : -1,
++                    .errorCode = (ErrorCode) src->message.error.error_code};
++                dst->set<NotifyMsg::Tag::error>(errorMsg);
++            }
++            break;
++        case CAMERA3_MSG_SHUTTER:
++            {
++                aidl::android::hardware::camera::device::ShutterMsg shutterMsg = {
++                        .frameNumber = static_cast<int32_t>(src->message.shutter.frame_number),
++                        .timestamp = static_cast<int64_t>(src->message.shutter.timestamp)};
++                dst->set<NotifyMsg::Tag::shutter>(shutterMsg);
++            }
++            break;
++        default:
++            ALOGE("%s: AIDL type converion failed. Unknown msg type 0x%x",
++                    __func__, src->type);
++    }
++}
++
++}  // namespace implementation
++}  // namespace device
++}  // namespace camera
++}  // namespace hardware
++}  // namespace android
+diff --git a/src/android/hal/device/convert.h b/src/android/hal/device/convert.h
+new file mode 100644
+index 000000000..045b5f550
+--- /dev/null
++++ b/src/android/hal/device/convert.h
+@@ -0,0 +1,81 @@
++/*
++ * Copyright (C) 2022 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef HARDWARE_INTERFACES_CAMERA_DEVICE_DEFAULT_CONVERT_H_
++#define HARDWARE_INTERFACES_CAMERA_DEVICE_DEFAULT_CONVERT_H_
++
++#include <aidl/android/hardware/camera/common/Status.h>
++#include <aidl/android/hardware/camera/device/BufferStatus.h>
++#include <aidl/android/hardware/camera/device/CameraMetadata.h>
++#include <aidl/android/hardware/camera/device/HalStream.h>
++#include <aidl/android/hardware/camera/device/NotifyMsg.h>
++#include <aidl/android/hardware/camera/device/Stream.h>
++#include <hardware/camera3.h>
++#include <system/camera_metadata.h>
++
++namespace android {
++namespace hardware {
++namespace camera {
++namespace device {
++namespace implementation {
++
++using ::aidl::android::hardware::camera::common::Status;
++using ::aidl::android::hardware::camera::device::BufferStatus;
++using ::aidl::android::hardware::camera::device::CameraMetadata;
++using ::aidl::android::hardware::camera::device::HalStream;
++using ::aidl::android::hardware::camera::device::NotifyMsg;
++using ::aidl::android::hardware::camera::device::Stream;
++
++// The camera3_stream_t sent to conventional HAL. Added mId fields to enable stream ID lookup
++// fromt a downcasted camera3_stream
++struct Camera3Stream : public camera3_stream {
++    int mId;
++};
++
++// convert conventional HAL status to AIDL Status
++Status getAidlStatus(int);
++
++void convertToAidl(const camera_metadata_t* src, CameraMetadata* dest);
++
++bool convertFromAidl(const CameraMetadata& src, const camera_metadata_t** dst);
++
++void convertFromAidl(const Stream &src, camera_stream_t* dst);
++
++void convertFromAidl(
++        buffer_handle_t*, BufferStatus, camera3_stream_t*, int acquireFence, // inputs
++        camera3_stream_buffer_t* dst);
++
++void convertToAidl(const Camera3Stream* src, HalStream* dst);
++void convertFromAidl(const Stream &src, Camera3Stream* dst);
++
++// The camera3_stream_t* in src must be the same as what wrapper HAL passed to conventional
++// HAL, or the ID lookup will return garbage. Caller should validate the ID in ErrorMsg is
++// indeed one of active stream IDs
++void convertToAidl(const camera3_notify_msg* src, NotifyMsg* dst);
++
++inline ndk::ScopedAStatus fromStatus(Status status) {
++    return status == Status::OK
++                   ? ndk::ScopedAStatus::ok()
++                   : ndk::ScopedAStatus::fromServiceSpecificError(static_cast<int32_t>(status));
++}
++
++}  // namespace implementation
++}  // namespace device
++}  // namespace camera
++}  // namespace hardware
++}  // namespace android
++
++#endif  // HARDWARE_INTERFACES_CAMERA_DEVICE_DEFAULT_CONVERT_H_
+diff --git a/src/android/hal/provider/Android.bp b/src/android/hal/provider/Android.bp
+new file mode 100644
+index 000000000..40d11a1b1
+--- /dev/null
++++ b/src/android/hal/provider/Android.bp
+@@ -0,0 +1,55 @@
++//
++// Copyright (C) 2020 The Android Open Source Project
++//
++// SPDX-License-Identifier: Apache-2.0
++//
++
++package {
++    default_team: "trendy_team_camera_framework",
++    // See: http://go/android-license-faq
++    // A large-scale-change added 'default_applicable_licenses' to import
++    // all of the 'license_kinds' from "hardware_interfaces_license"
++    // to get the below license kinds:
++    //   SPDX-license-identifier-Apache-2.0
++    default_applicable_licenses: ["Android-Apache-2.0"],
++}
++
++cc_defaults {
++    name: "libcamera_aidl_defaults",
++    vendor: true,
++    shared_libs: [
++        "android.hardware.camera.common-V1-ndk",
++        "android.hardware.camera.device-V1-ndk",
++        "android.hardware.camera.provider-V1-ndk",
++        "camera.device-libcamera-impl",
++        "libbinder_ndk",
++        "libcamera_metadata",
++        "libcutils",
++        "libfmq",
++        "libhardware",
++        "liblog",
++        "libutils",
++    ],
++    static_libs: ["android.hardware.camera.common-helper"],
++}
++
++cc_library_shared {
++    name: "android.hardware.camera.provider-V1-libcamera-impl",
++    srcs: ["LibcameraProvider.cpp"],
++    export_include_dirs: ["."],
++    defaults: ["libcamera_aidl_defaults"],
++}
++
++cc_defaults {
++    name: "camera_service.libcamera_defaults",
++    relative_install_path: "hw",
++    srcs: ["service.cpp"],
++    shared_libs: ["android.hardware.camera.provider-V1-libcamera-impl"],
++    defaults: ["libcamera_aidl_defaults"],
++}
++
++cc_binary {
++    name: "android.hardware.camera.provider-V1-libcamera-service",
++    init_rc: ["android.hardware.camera.provider-V1-libcamera-service.rc"],
++    defaults: ["camera_service.libcamera_defaults"],
++}
+diff --git a/src/android/hal/provider/LibcameraProvider.cpp b/src/android/hal/provider/LibcameraProvider.cpp
+new file mode 100644
+index 000000000..910023898
+--- /dev/null
++++ b/src/android/hal/provider/LibcameraProvider.cpp
+@@ -0,0 +1,490 @@
++/*
++ * Copyright (C) 2016 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#define LOG_TAG "LibcameraProvider"
++//#define LOG_NDEBUG 0
++#include <android/log.h>
++
++#include "LibcameraProvider.h"
++#include <aidl/android/hardware/camera/common/Status.h>
++
++#include <LibcameraDevice.h>
++
++#include <convert.h>
++#include <cutils/properties.h>
++#include <regex>
++#include <string>
++#include <utils/Trace.h>
++
++namespace android {
++namespace hardware {
++namespace camera {
++namespace provider {
++namespace implementation {
++
++namespace {
++// "device@<version>/libcamera/<id>"
++const std::regex kDeviceNameRE("device@([0-9]+\\.[0-9]+)/libcamera/(.+)");
++const char *kHAL3_4 = "3.4";
++const char *kHAL3_5 = "3.5";
++const int kMaxCameraDeviceNameLen = 128;
++const int kMaxCameraIdLen = 16;
++
++bool matchDeviceName(const std::string& deviceName, std::string* deviceVersion,
++                     std::string* cameraId) {
++    std::smatch sm;
++    if (std::regex_match(deviceName, sm, kDeviceNameRE)) {
++        if (deviceVersion != nullptr) {
++            *deviceVersion = sm[1];
++        }
++        if (cameraId != nullptr) {
++            *cameraId = sm[2];
++        }
++        return true;
++    }
++    return false;
++}
++
++} // anonymous namespace
++
++using ::aidl::android::hardware::camera::common::Status;
++using ::aidl::android::hardware::camera::common::CameraDeviceStatus;
++using ::aidl::android::hardware::camera::common::TorchModeStatus;
++using ::android::hardware::camera::device::implementation::LibcameraDevice;
++using ::android::hardware::camera::device::implementation::fromStatus;
++
++void LibcameraProvider::addDeviceNames(int camera_id, CameraDeviceStatus status, bool cam_new)
++{
++    char cameraId[kMaxCameraIdLen];
++    snprintf(cameraId, sizeof(cameraId), "%d", camera_id);
++    std::string cameraIdStr(cameraId);
++
++    mCameraIds.add(cameraIdStr);
++
++    // initialize mCameraDeviceNames and mOpenLegacySupported
++    mOpenLegacySupported[cameraIdStr] = false;
++    int deviceVersion = mModule->getDeviceVersion(camera_id);
++    auto deviceNamePair = std::make_pair(cameraIdStr,
++                                         getAidlDeviceName(cameraIdStr, deviceVersion));
++    mCameraDeviceNames.add(deviceNamePair);
++    if (cam_new) {
++        mCallbacks->cameraDeviceStatusChange(deviceNamePair.second, status);
++    }
++    if (deviceVersion >= CAMERA_DEVICE_API_VERSION_3_2 &&
++            mModule->isOpenLegacyDefined()) {
++        // try open_legacy to see if it actually works
++        struct hw_device_t* halDev = nullptr;
++        int ret = mModule->openLegacy(cameraId, CAMERA_DEVICE_API_VERSION_1_0, &halDev);
++        if (ret == 0) {
++            mOpenLegacySupported[cameraIdStr] = true;
++            halDev->close(halDev);
++            deviceNamePair = std::make_pair(cameraIdStr,
++                            getAidlDeviceName(cameraIdStr, CAMERA_DEVICE_API_VERSION_1_0));
++            mCameraDeviceNames.add(deviceNamePair);
++            if (cam_new) {
++                mCallbacks->cameraDeviceStatusChange(deviceNamePair.second, status);
++            }
++        } else if (ret == -EBUSY || ret == -EUSERS) {
++            // Looks like this provider instance is not initialized during
++            // system startup and there are other camera users already.
++            // Not a good sign but not fatal.
++            ALOGW("%s: open_legacy try failed!", __FUNCTION__);
++        }
++    }
++}
++
++void LibcameraProvider::removeDeviceNames(int camera_id)
++{
++    std::string cameraIdStr = std::to_string(camera_id);
++
++    mCameraIds.remove(cameraIdStr);
++
++    int deviceVersion = mModule->getDeviceVersion(camera_id);
++    auto deviceNamePair = std::make_pair(cameraIdStr,
++                                         getAidlDeviceName(cameraIdStr, deviceVersion));
++    mCameraDeviceNames.remove(deviceNamePair);
++    mCallbacks->cameraDeviceStatusChange(deviceNamePair.second, CameraDeviceStatus::NOT_PRESENT);
++    if (deviceVersion >= CAMERA_DEVICE_API_VERSION_3_2 &&
++        mModule->isOpenLegacyDefined() && mOpenLegacySupported[cameraIdStr]) {
++
++        deviceNamePair = std::make_pair(cameraIdStr,
++                            getAidlDeviceName(cameraIdStr, CAMERA_DEVICE_API_VERSION_1_0));
++        mCameraDeviceNames.remove(deviceNamePair);
++        mCallbacks->cameraDeviceStatusChange(deviceNamePair.second,
++                                             CameraDeviceStatus::NOT_PRESENT);
++    }
++
++    mModule->removeCamera(camera_id);
++}
++
++/**
++ * static callback forwarding methods from HAL to instance
++ */
++void LibcameraProvider::sCameraDeviceStatusChange(
++        const struct camera_module_callbacks* callbacks,
++        int camera_id,
++        int new_status) {
++    LibcameraProvider* cp = const_cast<LibcameraProvider*>(
++            static_cast<const LibcameraProvider*>(callbacks));
++    if (cp == nullptr) {
++        ALOGE("%s: callback ops is null", __FUNCTION__);
++        return;
++    }
++
++    Mutex::Autolock _l(cp->mCbLock);
++    char cameraId[kMaxCameraIdLen];
++    snprintf(cameraId, sizeof(cameraId), "%d", camera_id);
++    std::string cameraIdStr(cameraId);
++    cp->mCameraStatusMap[cameraIdStr] = (CameraDeviceStatus) new_status;
++
++    if (cp->mCallbacks == nullptr) {
++        // For camera connected before mCallbacks is set, the corresponding
++        // addDeviceNames() would be called later in setCallbacks().
++        return;
++    }
++
++    bool found = false;
++    CameraDeviceStatus status = (CameraDeviceStatus)new_status;
++    for (auto const& deviceNamePair : cp->mCameraDeviceNames) {
++        if (cameraIdStr.compare(deviceNamePair.first) == 0) {
++            cp->mCallbacks->cameraDeviceStatusChange(deviceNamePair.second, status);
++            found = true;
++        }
++    }
++
++    switch (status) {
++        case CameraDeviceStatus::PRESENT:
++        case CameraDeviceStatus::ENUMERATING:
++            if (!found) {
++                cp->addDeviceNames(camera_id, status, true);
++            }
++            break;
++        case CameraDeviceStatus::NOT_PRESENT:
++            if (found) {
++                cp->removeDeviceNames(camera_id);
++            }
++    }
++}
++
++void LibcameraProvider::sTorchModeStatusChange(
++        const struct camera_module_callbacks* callbacks,
++        const char* camera_id,
++        int new_status) {
++    LibcameraProvider* cp = const_cast<LibcameraProvider*>(
++            static_cast<const LibcameraProvider*>(callbacks));
++
++    if (cp == nullptr) {
++        ALOGE("%s: callback ops is null", __FUNCTION__);
++        return;
++    }
++
++    Mutex::Autolock _l(cp->mCbLock);
++    if (cp->mCallbacks != nullptr) {
++        std::string cameraIdStr(camera_id);
++        TorchModeStatus status = (TorchModeStatus) new_status;
++        for (auto const& deviceNamePair : cp->mCameraDeviceNames) {
++            if (cameraIdStr.compare(deviceNamePair.first) == 0) {
++                cp->mCallbacks->torchModeStatusChange(
++                        deviceNamePair.second, status);
++            }
++        }
++    }
++}
++
++std::string LibcameraProvider::getAidlDeviceName(
++        std::string cameraId, int deviceVersion) {
++    // Maybe consider create a version check method and SortedVec to speed up?
++    if (deviceVersion != CAMERA_DEVICE_API_VERSION_1_0 &&
++            deviceVersion != CAMERA_DEVICE_API_VERSION_3_2 &&
++            deviceVersion != CAMERA_DEVICE_API_VERSION_3_3 &&
++            deviceVersion != CAMERA_DEVICE_API_VERSION_3_4 &&
++            deviceVersion != CAMERA_DEVICE_API_VERSION_3_5 &&
++            deviceVersion != CAMERA_DEVICE_API_VERSION_3_6) {
++        ALOGE("%s: Invalid device HAL version: %d", __FUNCTION__, deviceVersion);
++        return "";
++    }
++
++    // AIDL version 1
++    char deviceName[kMaxCameraDeviceNameLen];
++    snprintf(deviceName, sizeof(deviceName), "device@1.0/libcamera/%s", cameraId.c_str());
++    return deviceName;
++}
++
++LibcameraProvider::LibcameraProvider() :
++        BnCameraProvider(),
++        camera_module_callbacks_t({sCameraDeviceStatusChange,
++                                   sTorchModeStatusChange}) {
++    mInitFailed = initialize();
++}
++
++LibcameraProvider::~LibcameraProvider() {}
++
++bool LibcameraProvider::initialize() {
++    camera_module_t *rawModule;
++    int err = hw_get_module(CAMERA_HARDWARE_MODULE_ID,
++            (const hw_module_t **)&rawModule);
++    if (err < 0) {
++        ALOGE("Could not load camera HAL module: %d (%s)", err, strerror(-err));
++        return true;
++    }
++
++    mModule = new CameraModule(rawModule);
++    err = mModule->init();
++    if (err != OK) {
++        ALOGE("Could not initialize camera HAL module: %d (%s)", err, strerror(-err));
++        mModule.clear();
++        return true;
++    }
++    ALOGI("Loaded \"%s\" camera module", mModule->getModuleName());
++
++    // Setup callback now because we are going to try openLegacy next
++    err = mModule->setCallbacks(this);
++    if (err != OK) {
++        ALOGE("Could not set camera module callback: %d (%s)", err, strerror(-err));
++        mModule.clear();
++        return true;
++    }
++
++    mPreferredHal3MinorVersion =
++        property_get_int32("ro.vendor.camera.wrapper.hal3TrebleMinorVersion", 3);
++    ALOGV("Preferred HAL 3 minor version is %d", mPreferredHal3MinorVersion);
++    switch(mPreferredHal3MinorVersion) {
++        case 2:
++        case 3:
++            // OK
++            break;
++        default:
++            ALOGW("Unknown minor camera device HAL version %d in property "
++                    "'camera.wrapper.hal3TrebleMinorVersion', defaulting to 3",
++                    mPreferredHal3MinorVersion);
++            mPreferredHal3MinorVersion = 3;
++    }
++
++    mNumberOfLegacyCameras = mModule->getNumberOfCameras();
++    for (int i = 0; i < mNumberOfLegacyCameras; i++) {
++        struct camera_info info;
++        auto rc = mModule->getCameraInfo(i, &info);
++        if (rc != NO_ERROR) {
++            ALOGE("%s: Camera info query failed!", __func__);
++            mModule.clear();
++            return true;
++        }
++
++        if (checkCameraVersion(i, info) != OK) {
++            ALOGE("%s: Camera version check failed!", __func__);
++            mModule.clear();
++            return true;
++        }
++
++        char cameraId[kMaxCameraIdLen];
++        snprintf(cameraId, sizeof(cameraId), "%d", i);
++        std::string cameraIdStr(cameraId);
++        mCameraStatusMap[cameraIdStr] = CameraDeviceStatus::PRESENT;
++
++        addDeviceNames(i);
++    }
++
++    return false; // mInitFailed
++}
++
++/**
++ * Check that the device HAL version is still in supported.
++ */
++int LibcameraProvider::checkCameraVersion(int id, camera_info info) {
++    if (mModule == nullptr) {
++        return NO_INIT;
++    }
++
++    // device_version undefined in CAMERA_MODULE_API_VERSION_1_0,
++    // All CAMERA_MODULE_API_VERSION_1_0 devices are backward-compatible
++    uint16_t moduleVersion = mModule->getModuleApiVersion();
++    if (moduleVersion >= CAMERA_MODULE_API_VERSION_2_0) {
++        // Verify the device version is in the supported range
++        switch (info.device_version) {
++            case CAMERA_DEVICE_API_VERSION_1_0:
++            case CAMERA_DEVICE_API_VERSION_3_2:
++            case CAMERA_DEVICE_API_VERSION_3_3:
++            case CAMERA_DEVICE_API_VERSION_3_4:
++            case CAMERA_DEVICE_API_VERSION_3_5:
++                // in support
++                break;
++            case CAMERA_DEVICE_API_VERSION_3_6:
++                /**
++                 * ICameraDevice@3.5 contains APIs from both
++                 * CAMERA_DEVICE_API_VERSION_3_6 and CAMERA_MODULE_API_VERSION_2_5
++                 * so we require HALs to uprev both for simplified supported combinations.
++                 * HAL can still opt in individual new APIs indepedently.
++                 */
++                if (moduleVersion < CAMERA_MODULE_API_VERSION_2_5) {
++                    ALOGE("%s: Device %d has unsupported version combination:"
++                            "HAL version %x and module version %x",
++                            __FUNCTION__, id, info.device_version, moduleVersion);
++                    return NO_INIT;
++                }
++                break;
++            case CAMERA_DEVICE_API_VERSION_2_0:
++            case CAMERA_DEVICE_API_VERSION_2_1:
++            case CAMERA_DEVICE_API_VERSION_3_0:
++            case CAMERA_DEVICE_API_VERSION_3_1:
++                // no longer supported
++            default:
++                ALOGE("%s: Device %d has HAL version %x, which is not supported",
++                        __FUNCTION__, id, info.device_version);
++                return NO_INIT;
++        }
++    }
++
++    return OK;
++}
++
++ndk::ScopedAStatus LibcameraProvider::setCallback(
++        const std::shared_ptr<ICameraProviderCallback>& in_callback) {
++    Mutex::Autolock _l(mCbLock);
++    mCallbacks = in_callback;
++    if (in_callback == nullptr)
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++
++    // Add and report all presenting external cameras.
++    for (auto const& statusPair : mCameraStatusMap) {
++        int id = std::stoi(statusPair.first);
++        auto status = static_cast<CameraDeviceStatus>(statusPair.second);
++        if (id >= mNumberOfLegacyCameras && status != CameraDeviceStatus::NOT_PRESENT) {
++            addDeviceNames(id, status, true);
++        }
++    }
++
++    return fromStatus(Status::OK);
++}
++
++ndk::ScopedAStatus LibcameraProvider::getVendorTags(
++        std::vector<VendorTagSection>* _aidl_return) {
++    if (_aidl_return == nullptr) {
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++    }
++    // libcamera does not implement the .get_vendor_tag_ops
++    // returning empty vector.
++    *_aidl_return = {};
++    return fromStatus(Status::OK);
++}
++
++ndk::ScopedAStatus LibcameraProvider::getCameraIdList(std::vector<std::string>* _aidl_return) {
++    if (_aidl_return == nullptr) {
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++    }
++
++    for (auto const& deviceNamePair : mCameraDeviceNames) {
++        if (std::stoi(deviceNamePair.first) >= mNumberOfLegacyCameras) {
++            // External camera devices must be reported through the device status change callback,
++            // not in this list.
++            continue;
++        }
++        if (mCameraStatusMap[deviceNamePair.first] == CameraDeviceStatus::PRESENT) {
++            _aidl_return->push_back(deviceNamePair.second);
++        }
++    }
++
++    return fromStatus(Status::OK);
++}
++
++ndk::ScopedAStatus LibcameraProvider::getCameraDeviceInterface(
++        const std::string& in_cameraDeviceName,
++        std::shared_ptr<ICameraDevice>* _aidl_return) {
++    if (_aidl_return == nullptr) {
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++    }
++
++    std::string deviceVersion, cameraId;
++    bool match = matchDeviceName(in_cameraDeviceName, &deviceVersion, &cameraId);
++
++    if (!match) {
++        *_aidl_return = nullptr;
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++    }
++
++    ssize_t index = mCameraDeviceNames.indexOf(std::make_pair(cameraId, in_cameraDeviceName));
++    if (index == NAME_NOT_FOUND) { // Either an illegal name or a device version mismatch
++        Status status = Status::OK;
++        ssize_t idx = mCameraIds.indexOf(cameraId);
++        if (idx == NAME_NOT_FOUND) {
++            ALOGE("%s: cannot find camera %s!", __FUNCTION__, cameraId.c_str());
++            status = Status::ILLEGAL_ARGUMENT;
++        } else { // invalid version
++            ALOGE("%s: camera device %s does not support version %s!",
++                    __FUNCTION__, cameraId.c_str(), deviceVersion.c_str());
++            status = Status::OPERATION_NOT_SUPPORTED;
++        }
++        *_aidl_return = nullptr;
++        return fromStatus(status);
++    }
++
++    if (mCameraStatusMap.count(cameraId) == 0 ||
++            mCameraStatusMap[cameraId] != CameraDeviceStatus::PRESENT) {
++        *_aidl_return = nullptr;
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++    }
++
++    std::shared_ptr<LibcameraDevice> device =
++        ndk::SharedRefBase::make<LibcameraDevice>(mModule, cameraId, mCameraDeviceNames);
++
++    if (device == nullptr) {
++        ALOGE("%s: cannot allocate camera device for id %s", __FUNCTION__, in_cameraDeviceName.c_str());
++        *_aidl_return = nullptr;
++        return fromStatus(Status::INTERNAL_ERROR);
++    }
++
++    if (device->isInitFailed()) {
++        ALOGE("%s: camera device %s init failed!", __FUNCTION__, in_cameraDeviceName.c_str());
++        *_aidl_return = nullptr;
++        return fromStatus(Status::INTERNAL_ERROR);
++    }
++
++    *_aidl_return = device;
++    return fromStatus(Status::OK);
++}
++
++ndk::ScopedAStatus LibcameraProvider::notifyDeviceStateChange(
++        int64_t in_deviceState) {
++    ALOGD("%s: New device state: 0x%" PRIx64, __FUNCTION__, in_deviceState);
++    uint64_t state = static_cast<uint64_t>(in_deviceState);
++    mModule->notifyDeviceStateChange(state);
++    return fromStatus(Status::OK);
++}
++
++ndk::ScopedAStatus LibcameraProvider::getConcurrentCameraIds(
++        std::vector<ConcurrentCameraIdCombination>* _aidl_return) {
++    if (_aidl_return == nullptr) {
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++    }
++    // No concurrent camera combinations are supported
++    *_aidl_return = {};
++    return fromStatus(Status::OK);
++}
++
++ndk::ScopedAStatus LibcameraProvider::isConcurrentStreamCombinationSupported(
++        const std::vector<CameraIdAndStreamCombination>&, bool* _aidl_return) {
++    if (_aidl_return == nullptr) {
++        return fromStatus(Status::ILLEGAL_ARGUMENT);
++    }
++    // No concurrent stream combinations are supported
++    *_aidl_return = false;
++    return fromStatus(Status::OK);
++}
++
++} // namespace implementation
++}  // namespace provider
++}  // namespace camera
++}  // namespace hardware
++}  // namespace android
+diff --git a/src/android/hal/provider/LibcameraProvider.h b/src/android/hal/provider/LibcameraProvider.h
+new file mode 100644
+index 000000000..8021277e8
+--- /dev/null
++++ b/src/android/hal/provider/LibcameraProvider.h
+@@ -0,0 +1,130 @@
++/*
++ * Copyright (C) 2016 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef ANDROID_HARDWARE_CAMERA_PROVIDER_V2_5_LEGACYCAMERAPROVIDER_H
++#define ANDROID_HARDWARE_CAMERA_PROVIDER_V2_5_LEGACYCAMERAPROVIDER_H
++
++#include <SimpleThread.h>
++#include <aidl/android/hardware/camera/common/CameraDeviceStatus.h>
++#include <aidl/android/hardware/camera/common/VendorTagSection.h>
++#include <aidl/android/hardware/camera/device/ICameraDevice.h>
++#include <aidl/android/hardware/camera/provider/BnCameraProvider.h>
++#include <aidl/android/hardware/camera/provider/CameraIdAndStreamCombination.h>
++#include <aidl/android/hardware/camera/provider/ConcurrentCameraIdCombination.h>
++#include <aidl/android/hardware/camera/provider/ICameraProviderCallback.h>
++#include <hardware/camera_common.h>
++#include <CameraModule.h>
++#include <VendorTagDescriptor.h>
++#include <poll.h>
++#include <utils/Mutex.h>
++#include <utils/Thread.h>
++#include <utils/SortedVector.h>
++#include <thread>
++#include <unordered_map>
++#include <unordered_set>
++#include <map>
++
++namespace android {
++namespace hardware {
++namespace camera {
++namespace provider {
++namespace implementation {
++
++using ::aidl::android::hardware::camera::common::CameraDeviceStatus;
++using ::aidl::android::hardware::camera::common::VendorTagSection;
++using ::aidl::android::hardware::camera::device::ICameraDevice;
++using ::aidl::android::hardware::camera::provider::BnCameraProvider;
++using ::aidl::android::hardware::camera::provider::CameraIdAndStreamCombination;
++using ::aidl::android::hardware::camera::provider::ConcurrentCameraIdCombination;
++using ::aidl::android::hardware::camera::provider::ICameraProviderCallback;
++using ::android::hardware::camera::common::helper::SimpleThread;
++using ::android::hardware::camera::common::helper::CameraModule;
++
++/**
++ * This implementation supports cameras implemented via the legacy libhardware
++ * camera HAL definitions.
++ */
++class LibcameraProvider : public BnCameraProvider,
++                          public camera_module_callbacks_t {
++public:
++    LibcameraProvider();
++    ~LibcameraProvider() override;
++
++    // Caller must use this method to check if CameraProvider ctor failed
++    bool isInitFailed() { return mInitFailed; }
++
++    ndk::ScopedAStatus setCallback(
++            const std::shared_ptr<ICameraProviderCallback>& in_callback) override;
++    ndk::ScopedAStatus getVendorTags(std::vector<VendorTagSection>* _aidl_return) override;
++    ndk::ScopedAStatus getCameraIdList(std::vector<std::string>* _aidl_return) override;
++    ndk::ScopedAStatus getCameraDeviceInterface(
++            const std::string& in_cameraDeviceName,
++            std::shared_ptr<ICameraDevice>* _aidl_return) override;
++    ndk::ScopedAStatus notifyDeviceStateChange(int64_t in_deviceState) override;
++    ndk::ScopedAStatus getConcurrentCameraIds(
++            std::vector<ConcurrentCameraIdCombination>* _aidl_return) override;
++    ndk::ScopedAStatus isConcurrentStreamCombinationSupported(
++            const std::vector<CameraIdAndStreamCombination>& in_configs,
++            bool* _aidl_return) override;
++
++protected:
++    Mutex mCbLock;
++    std::shared_ptr<ICameraProviderCallback> mCallbacks = nullptr;
++
++    sp<CameraModule> mModule;
++
++    int mNumberOfLegacyCameras;
++    std::map<std::string, CameraDeviceStatus> mCameraStatusMap; // camera id -> status
++    std::map<std::string, bool> mOpenLegacySupported; // camera id -> open_legacy HAL1.0 supported
++    SortedVector<std::string> mCameraIds; // the "0"/"1" libcamera camera Ids
++    // (cameraId string, aidl device name) pairs
++    SortedVector<std::pair<std::string, std::string>> mCameraDeviceNames;
++
++    int mPreferredHal3MinorVersion;
++
++    // Must be queried before using any APIs.
++    // APIs will only work when this returns true
++    bool mInitFailed;
++    bool initialize();
++
++    int checkCameraVersion(int id, camera_info info);
++
++    // create HIDL device name from camera ID and legacy device version
++    std::string getAidlDeviceName(std::string cameraId, int deviceVersion);
++
++    // static callback forwarding methods
++    static void sCameraDeviceStatusChange(
++        const struct camera_module_callbacks* callbacks,
++        int camera_id,
++        int new_status);
++    static void sTorchModeStatusChange(
++        const struct camera_module_callbacks* callbacks,
++        const char* camera_id,
++        int new_status);
++
++    void addDeviceNames(int camera_id, CameraDeviceStatus status = CameraDeviceStatus::PRESENT,
++                        bool cam_new = false);
++    void removeDeviceNames(int camera_id);
++
++};
++
++}  // namespace implementation
++}  // namespace provider
++}  // namespace camera
++}  // namespace hardware
++}  // namespace android
++
++#endif  // ANDROID_HARDWARE_CAMERA_PROVIDER_V2_5_LEGACYCAMERAPROVIDER_H
+diff --git a/src/android/hal/provider/android.hardware.camera.provider-V1-libcamera-service.rc b/src/android/hal/provider/android.hardware.camera.provider-V1-libcamera-service.rc
+new file mode 100644
+index 000000000..6f9862654
+--- /dev/null
++++ b/src/android/hal/provider/android.hardware.camera.provider-V1-libcamera-service.rc
+@@ -0,0 +1,10 @@
++service vendor.camera.provider-libcamera /vendor/bin/hw/android.hardware.camera.provider-V1-libcamera-service
++    interface aidl android.hardware.camera.provider.ICameraProvider/libcamera/0
++    class hal
++    user cameraserver
++    group audio camera input drmrpc
++    ioprio rt 4
++    capabilities SYS_NICE
++    task_profiles CameraServiceCapacity MaxPerformance
++    setenv LIBCAMERA_LOG_LEVELS *:WARN
++    setenv LIBCAMERA_LOG_FILE syslog
+diff --git a/src/android/hal/provider/service.cpp b/src/android/hal/provider/service.cpp
+new file mode 100644
+index 000000000..2e71f0f5b
+--- /dev/null
++++ b/src/android/hal/provider/service.cpp
+@@ -0,0 +1,45 @@
++/*
++ * Copyright 2017 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include <android/binder_manager.h>
++#include <android/binder_process.h>
++
++#include "LibcameraProvider.h"
++
++using ::android::hardware::camera::provider::implementation::LibcameraProvider;
++
++namespace {
++// Default recommended RPC thread count for camera provider implementations
++const int HWBINDER_THREAD_COUNT = 6;
++}  // namespace
++
++int main()
++{
++    ALOGI("LibcameraProvider libcamera service is starting.");
++
++    ABinderProcess_setThreadPoolMaxThreadCount(HWBINDER_THREAD_COUNT);
++
++    std::shared_ptr<LibcameraProvider> provider = ndk::SharedRefBase::make<LibcameraProvider>();
++    const std::string serviceName = std::string(LibcameraProvider::descriptor) + "/libcamera/0";
++
++    binder_exception_t ret =
++            AServiceManager_addService(provider->asBinder().get(), serviceName.c_str());
++    LOG_ALWAYS_FATAL_IF(ret != EX_NONE,
++                        "Error while registering libcamera camera provider service: %d", ret);
++
++    ABinderProcess_joinThreadPool();
++    return EXIT_FAILURE;  // should not reach
++}

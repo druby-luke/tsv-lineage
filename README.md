@@ -76,6 +76,9 @@ local adaptation notes; preserve upstream authors and signoffs when rebasing.
 | TAS5782M codec | Origins, contributors and local changes in [drivers/tas5782m/README.md](drivers/tas5782m/README.md); GPL-2.0-only |
 | Xiaomi kernel configuration | [android_device_xiaomi_mi89xx-mainline](https://github.com/LineageOS/android_device_xiaomi_mi89xx-mainline); pinned by the Git submodule; upstream notices apply |
 | ath10k firmware encoder | Origin and ISC license in [tools/README.md](tools/README.md) and the script's original notice |
+| libcamera and Android camera adapter | [Upstream libcamera](https://github.com/libcamera-org/libcamera), [TI Android integration](https://git.ti.com/cgit/android/external-libcamera/), and [Alessandro Fontana's Android fixes](https://github.com/alessandro-fontana/android_external_libcamera); original source notices retained |
+| Android AIDL provider and GPU build integration | [Raspberry Vanilla](https://github.com/raspberry-vanilla/android_external_libcamera) and [haretic](https://github.com/haretic/android_external_libcamera); original source notices retained |
+| S5KC505A helper, LSC/statistics and calibration conversion | Mei Tao's work distributed by [rickx/ubuntu-thinksmart](https://github.com/rickx/ubuntu-thinksmart/tree/6f5b14928a873d171e1deddb5edbdc6967c86aa2/sources/camera) and [jethac's Lenovo sensor-library decode](https://github.com/jethac/lenovo-thinksmart-view/blob/fe9c0a58a1a2b7c4893f2ff76ff5c0b90206d458/streams/camera/s5kc505a-sensor-lib-decode.txt); detailed provenance and limitations in the sensor patch; no proprietary-library redistribution rights asserted |
 
 Unless otherwise noted, independently authored integration code, support scripts
 and documentation are licensed under the [Apache License, Version 2.0](LICENSE).
