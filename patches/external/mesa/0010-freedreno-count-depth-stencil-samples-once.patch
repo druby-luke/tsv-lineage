@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Chris Paslawski <chris@paslawski.me>
 Date: Wed, 4 Nov 2026 14:32:02 -0800
-Subject: [PATCH] freedreno: count depth and stencil samples once in GMEM
+Subject: [PATCH 10/19] freedreno: count depth and stencil samples once in GMEM
 
 A resource's layout.cpp already includes its sample count. Multiplying it
 by the framebuffer sample count again overestimates depth/stencil storage
@@ -9,17 +9,23 @@ for MSAA. Recover the per-sample size before accounting for the framebuffer
 samples, including multisampled render-to-texture and separate stencil.
 
 Split from Jetha Chan's Mesa 26.2.6 port of the MIT-licensed
-justhalfbit/thinksmart-ubuntu-image GMEM fix. Keep the Lineage-selected
-Mesa version and apply this independently of experimental FP16 changes.
+justhalfbit/thinksmart-ubuntu-image GMEM fix. Apply independently of
+experimental FP16 changes.
 
 Origin: Jetha Chan's ThinkSmart View port, adapted to Lineage Mesa 26.2.3
 Source: https://github.com/jethac/lenovo-thinksmart-view/blob/1f99f7f09c26074d53064d7bb1fada262cbef10a/streams/audio-dsp/patches/0001-freedreno-gmem-no-fit-sysmem.patch
 Original-commit: 712ef9414fa111d1a7fd2a1134b217b32de09f46
-Base-commit: 400e673cf8ba515d3aace56ed3acc3bb300869a5
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
 Apply in filename order within this project.
+Backport: refresh the existing device fix onto Mesa 26.2.7.
 
 ---
+ src/gallium/drivers/freedreno/freedreno_gmem.c |   11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
 diff --git a/src/gallium/drivers/freedreno/freedreno_gmem.c b/src/gallium/drivers/freedreno/freedreno_gmem.c
+index 2ee9b0b4b5d4b9c7a5153c2e229bf7a3128489d6..a4075df8d178e66b3a32690eb1ba42548a750e10 100644
 --- a/src/gallium/drivers/freedreno/freedreno_gmem.c
 +++ b/src/gallium/drivers/freedreno/freedreno_gmem.c
 @@ -462,9 +462,16 @@ gmem_key_init(struct fd_batch *batch, bool assume_zs, bool no_scis_opt)
@@ -41,3 +47,5 @@ diff --git a/src/gallium/drivers/freedreno/freedreno_gmem.c b/src/gallium/driver
  
        /* If we clear z or s but not both, and we are using z24s8 (ie.
         * !separate_stencil) then we need to restore the other, even if
+-- 
+2.43.0

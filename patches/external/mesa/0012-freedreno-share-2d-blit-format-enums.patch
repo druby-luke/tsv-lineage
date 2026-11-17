@@ -1,0 +1,191 @@
+From ba272329359b5efb22d19369071310d159233a3a Mon Sep 17 00:00:00 2001
+From: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Date: Thu, 3 Sep 2026 00:19:47 +0300
+Subject: [PATCH 12/19] freedreno/registers: make the 2D blit ifmt enums common
+
+a5xx and a6xx have the same (or similar) 2D blit core, and the enums
+describing the intermediate format it converts through are identical:
+the same eight values with the same names.  a5xx cannot use them,
+though, because they live in a6xx_enums.xml, so fd5_blitter.c carries a
+hand-written copy.
+
+Move a6xx_2d_ifmt and a6xx_sp_a2d_output_ifmt_type to adreno_common.xml,
+which both generations already import, and rename them to adreno_2d_ifmt
+and adreno_2d_output_ifmt_type after the convention there.
+
+Assisted-by: LLM
+Signed-off-by: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45483>
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Upstream-commit: ba272329359b5efb22d19369071310d159233a3a
+Source: https://gitlab.freedesktop.org/mesa/mesa/-/commit/ba272329359b5efb22d19369071310d159233a3a
+Backport: refresh the fd6_blitter.cc context around the existing destination-format conversion; retain the A6xx and Turnip enum consumers.
+
+---
+ src/freedreno/registers/adreno/a6xx.xml           |    9 ++-------
+ src/freedreno/registers/adreno/a6xx_enums.xml     |   13 ------------
+ src/freedreno/registers/adreno/adreno_common.xml  |   22 +++++++++++++++++++++
+ src/freedreno/vulkan/tu_clear_blit.cc             |    8 ++++----
+ src/gallium/drivers/freedreno/a6xx/fd6_blitter.cc |    6 +++---
+ 5 files changed, 31 insertions(+), 27 deletions(-)
+
+diff --git a/src/freedreno/registers/adreno/a6xx.xml b/src/freedreno/registers/adreno/a6xx.xml
+index 6cb0875cfb043da4a9b6a088be234f2cc196a491..83f2d907757ed60b11097082122c1b2cbb6382ee 100644
+--- a/src/freedreno/registers/adreno/a6xx.xml
++++ b/src/freedreno/registers/adreno/a6xx.xml
+@@ -2173,7 +2173,7 @@ by a particular renderpass/blit.
+ 		<bitfield name="IS_SRC_YUV" pos="19" type="boolean"/>
+ 		<!-- some sort of channel mask, disabled channels are set to zero ? -->
+ 		<bitfield name="MASK" low="20" high="23"/>
+-		<bitfield name="IFMT" low="24" high="26" type="a6xx_2d_ifmt"/>
++		<bitfield name="IFMT" low="24" high="26" type="adreno_2d_ifmt"/>
+ 		<bitfield name="FULL_RANGE_YUV" pos="27" type="boolean"/>
+ 		<bitfield name="LINEAR_YUV" pos="28" type="boolean"/>
+ 		<bitfield name="RASTER_MODE" pos="29" type="a6xx_raster_mode"/>
+@@ -4337,15 +4337,10 @@ by a particular renderpass/blit.
+ 
+ 	<reg32 offset="0xab23" name="SP_UNKNOWN_AB23" variants="A8XX-"/>
+ 
+-	<enum name="a6xx_sp_a2d_output_ifmt_type">
+-		<value name="OUTPUT_IFMT_2D_FLOAT" value="0"/>
+-		<value name="OUTPUT_IFMT_2D_SINT" value="1"/>
+-		<value name="OUTPUT_IFMT_2D_UINT" value="2"/>
+-	</enum>
+ 
+ 	<bitset name="a6xx_sp_a2d_output_info" inline="yes">
+ 		<bitfield name="HALF_PRECISION" pos="0" type="boolean"/>
+-		<bitfield name="IFMT_TYPE" low="1" high="2" type="a6xx_sp_a2d_output_ifmt_type"/>
++		<bitfield name="IFMT_TYPE" low="1" high="2" type="adreno_2d_output_ifmt_type"/>
+ 		<!-- looks like HW only cares about the base type of this format,
+ 		     which matches the ifmt? -->
+ 		<bitfield name="COLOR_FORMAT" low="3" high="10" type="a6xx_format"/>
+diff --git a/src/freedreno/registers/adreno/a6xx_enums.xml b/src/freedreno/registers/adreno/a6xx_enums.xml
+index b44946f36fae9ced165c9d991c7313b78244eee9..18c2104d8d249cf685484352dca872472a08d652 100644
+--- a/src/freedreno/registers/adreno/a6xx_enums.xml
++++ b/src/freedreno/registers/adreno/a6xx_enums.xml
+@@ -319,19 +319,6 @@ to upconvert to 32b float internally?
+ 32b float:   4
+ 16b float:   3
+  -->
+-<enum name="a6xx_2d_ifmt">
+-	<value value="0x7"  name="R2D_INT32"/>
+-	<value value="0x6"  name="R2D_INT16"/>
+-	<value value="0x5"  name="R2D_INT8"/>
+-	<value value="0x4"  name="R2D_FLOAT32"/>
+-	<value value="0x3"  name="R2D_FLOAT16"/>
+-	<value value="0x2"  name="R2D_SNORM8"/>
+-	<value value="0x1"  name="R2D_UNORM8_SRGB"/>
+-	<value value="0x0"  name="R2D_UNORM8"/>
+-
+-	<!-- Not a hw enum, used internally in driver -->
+-	<value value="0xff" name="R2D_NONE"/>
+-</enum>
+ 
+ <enum name="a6xx_tex_type">
+ 	<value name="A6XX_TEX_1D" value="0"/>
+diff --git a/src/freedreno/registers/adreno/adreno_common.xml b/src/freedreno/registers/adreno/adreno_common.xml
+index 195cee0783575a435962d5b926cbdcb5dd231ea7..2ff22515cdd9d30f9c4f6261bad090b3a452e263 100644
+--- a/src/freedreno/registers/adreno/adreno_common.xml
++++ b/src/freedreno/registers/adreno/adreno_common.xml
+@@ -451,4 +451,26 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
+ 	 -->
+ </domain>
+ 
++<!-- The 2D blit core converts through an intermediate format.
++     Shared by a5xx ({RB,GRAS}_2D_BLIT_CNTL) and a6xx (A2D_BLT_CNTL). -->
++<enum name="adreno_2d_ifmt">
++	<value value="0x7"  name="R2D_INT32"/>
++	<value value="0x6"  name="R2D_INT16"/>
++	<value value="0x5"  name="R2D_INT8"/>
++	<value value="0x4"  name="R2D_FLOAT32"/>
++	<value value="0x3"  name="R2D_FLOAT16"/>
++	<value value="0x2"  name="R2D_SNORM8"/>
++	<value value="0x1"  name="R2D_UNORM8_SRGB"/>
++	<value value="0x0"  name="R2D_UNORM8"/>
++
++	<!-- Not a hw enum, used internally in driver -->
++	<value value="0xff" name="R2D_NONE"/>
++</enum>
++
++<enum name="adreno_2d_output_ifmt_type">
++	<value name="OUTPUT_IFMT_2D_FLOAT" value="0"/>
++	<value name="OUTPUT_IFMT_2D_SINT" value="1"/>
++	<value name="OUTPUT_IFMT_2D_UINT" value="2"/>
++</enum>
++
+ </database>
+diff --git a/src/freedreno/vulkan/tu_clear_blit.cc b/src/freedreno/vulkan/tu_clear_blit.cc
+index 387c7d54849f1d989e2f1472b8c14ec2e7479395..b01867b1ecbae05c71643f5edcd671c90a00cf0c 100644
+--- a/src/freedreno/vulkan/tu_clear_blit.cc
++++ b/src/freedreno/vulkan/tu_clear_blit.cc
+@@ -171,7 +171,7 @@ tu_pack_float32_for_d32(float val)
+ 
+ /* r2d_ = BLIT_OP_SCALE operations */
+ 
+-static enum a6xx_2d_ifmt
++static enum adreno_2d_ifmt
+ format_to_ifmt(enum pipe_format format)
+ {
+    if (format == PIPE_FORMAT_Z24_UNORM_S8_UINT ||
+@@ -334,7 +334,7 @@ r2d_clear_value(struct tu_cmd_buffer *cmd,
+    default:
+       assert(!util_format_is_depth_or_stencil(format));
+       const struct util_format_description *desc = util_format_description(format);
+-      enum a6xx_2d_ifmt ifmt = format_to_ifmt(format);
++      enum adreno_2d_ifmt ifmt = format_to_ifmt(format);
+ 
+       assert(desc->layout == UTIL_FORMAT_LAYOUT_PLAIN ||
+              format == PIPE_FORMAT_R11G11B10_FLOAT);
+@@ -565,7 +565,7 @@ r2d_setup_common(struct tu_cmd_buffer *cmd,
+ 
+    enum a6xx_format fmt = blit_base_format<CHIP>(dst_format, ubwc, false);
+    fixup_dst_format(src_format, &dst_format, &fmt);
+-   enum a6xx_2d_ifmt ifmt = format_to_ifmt(dst_format);
++   enum adreno_2d_ifmt ifmt = format_to_ifmt(dst_format);
+ 
+    enum a6xx_a2d_pixel_op pixel_op = PIXEL_OP_DISABLED;
+    enum adreno_rb_blend_factor color_src_factor = FACTOR_ZERO;
+@@ -625,7 +625,7 @@ r2d_setup_common(struct tu_cmd_buffer *cmd,
+    if (fmt == FMT6_10_10_10_2_UNORM_DEST)
+       fmt = FMT6_16_16_16_16_FLOAT;
+ 
+-   enum a6xx_sp_a2d_output_ifmt_type output_ifmt_type;
++   enum adreno_2d_output_ifmt_type output_ifmt_type;
+    if (util_format_is_pure_uint(dst_format))
+       output_ifmt_type = OUTPUT_IFMT_2D_UINT;
+    else if (util_format_is_pure_sint(dst_format))
+diff --git a/src/gallium/drivers/freedreno/a6xx/fd6_blitter.cc b/src/gallium/drivers/freedreno/a6xx/fd6_blitter.cc
+index 726fc4cd6dc9a07367bd250a42238fdf953741c9..413ccc3a59f1cedc2dcc16019706b158513f19fe 100644
+--- a/src/gallium/drivers/freedreno/a6xx/fd6_blitter.cc
++++ b/src/gallium/drivers/freedreno/a6xx/fd6_blitter.cc
+@@ -26,7 +26,7 @@
+ #include "fd6_pack.h"
+ #include "fd6_resource.h"
+ 
+-static inline enum a6xx_2d_ifmt
++static inline enum adreno_2d_ifmt
+ fd6_ifmt(enum a6xx_format fmt)
+ {
+    switch (fmt) {
+@@ -302,7 +302,7 @@ emit_blit_setup(fd_ncrb<CHIP> &ncrb, enum pipe_format pfmt,
+ {
+    enum a6xx_format fmt = fd6_color_format(pfmt, TILE6_LINEAR);
+    bool is_srgb = util_format_is_srgb(pfmt);
+-   enum a6xx_2d_ifmt ifmt = fd6_ifmt(fmt);
++   enum adreno_2d_ifmt ifmt = fd6_ifmt(fmt);
+ 
+    if (is_srgb) {
+       assert(ifmt == R2D_UNORM8);
+@@ -329,7 +329,7 @@ emit_blit_setup(fd_ncrb<CHIP> &ncrb, enum pipe_format pfmt,
+    if (fmt == FMT6_10_10_10_2_UNORM_DEST)
+       fmt = FMT6_16_16_16_16_FLOAT;
+ 
+-   enum a6xx_sp_a2d_output_ifmt_type output_ifmt_type;
++   enum adreno_2d_output_ifmt_type output_ifmt_type;
+    if (util_format_is_pure_uint(pfmt))
+       output_ifmt_type = OUTPUT_IFMT_2D_UINT;
+    else if (util_format_is_pure_sint(pfmt))
+-- 
+2.43.0

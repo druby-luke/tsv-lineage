@@ -1,0 +1,47 @@
+From fa1fccede9df0cde0cf54dd1ee361cb91bc10d1f Mon Sep 17 00:00:00 2001
+From: Yumi Yukimura <me.cafebabe@gmail.com>
+Date: Mon, 3 Nov 2025 10:38:37 +0800
+Subject: [PATCH 04/19] LINEAGE: android: Add "_mesa3d" suffix to vulkan.lvp
+
+Avoids conflict with the one defined on Android.bp in external/mesa3d
+
+Change-Id: I44b9c27a13c7619cbb2c9dfe804e3f81348feffb
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Source: https://github.com/LineageOS/android_external_mesa/commit/fa1fccede9df0cde0cf54dd1ee361cb91bc10d1f
+Backport: retain the existing Lineage Android integration on Mesa 26.2.7.
+
+---
+ android/Android.mk                       |    2 +-
+ src/gallium/targets/lavapipe/meson.build |    2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/android/Android.mk b/android/Android.mk
+index 58d2c1f7777730b7fa79181f52c357d87a9fb12d..b42878f252abe72888ddedb6077dddf0115c83b2 100644
+--- a/android/Android.mk
++++ b/android/Android.mk
+@@ -50,7 +50,7 @@ MESA_VK_LIB_SUFFIX_freedreno := freedreno
+ MESA_VK_LIB_SUFFIX_broadcom := broadcom
+ MESA_VK_LIB_SUFFIX_panfrost := panfrost
+ MESA_VK_LIB_SUFFIX_virtio := virtio
+-MESA_VK_LIB_SUFFIX_swrast := lvp
++MESA_VK_LIB_SUFFIX_swrast := lvp_mesa3d
+ 
+ include $(CLEAR_VARS)
+ 
+diff --git a/src/gallium/targets/lavapipe/meson.build b/src/gallium/targets/lavapipe/meson.build
+index 41de1e5a0f1166d12632fd6cafd4a8e96538101d..a6cafcac64d53d7dddc6616dfbbd771c47ae4192 100644
+--- a/src/gallium/targets/lavapipe/meson.build
++++ b/src/gallium/targets/lavapipe/meson.build
+@@ -1,7 +1,7 @@
+ 
+ 
+ libvulkan_lvp = shared_library(
+-  'vulkan_lvp',
++  'vulkan_lvp_mesa3d',
+   [ 'lavapipe_target.c' ],
+   vs_module_defs : vulkan_api_def,
+   include_directories : [ inc_src, inc_util, inc_include, inc_gallium, inc_gallium_aux, inc_gallium_winsys, inc_gallium_drivers ],
+-- 
+2.43.0

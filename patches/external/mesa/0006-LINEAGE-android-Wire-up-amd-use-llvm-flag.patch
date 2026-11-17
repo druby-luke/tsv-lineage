@@ -1,0 +1,30 @@
+From 8f15d79b9229432c1060360290c5f0b283f5e25f Mon Sep 17 00:00:00 2001
+From: Sebastiano Barezzi <seba@sebaubuntu.dev>
+Date: Wed, 19 Nov 2025 02:08:30 +0100
+Subject: [PATCH 06/19] LINEAGE: android: Wire up `amd-use-llvm` flag
+
+Change-Id: I21dd2fad4ef8d7c7674973ef5e008139f182ac20
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Source: https://github.com/LineageOS/android_external_mesa/commit/8f15d79b9229432c1060360290c5f0b283f5e25f
+Backport: retain the existing Lineage Android integration on Mesa 26.2.7.
+
+---
+ android/mesa3d_cross.mk |    1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/android/mesa3d_cross.mk b/android/mesa3d_cross.mk
+index 97eebe88ca02b050598860416560059902de2839..c9c900803563ae0e41750f7e851c49d0f71cf6c8 100644
+--- a/android/mesa3d_cross.mk
++++ b/android/mesa3d_cross.mk
+@@ -94,6 +94,7 @@ MESON_GEN_NINJA := \
+ 	-Dgbm-backends-path=/vendor/$(MESA3D_LIB_DIR)                                \
+ 	-Degl=$(if $(BOARD_MESA3D_GALLIUM_DRIVERS),enabled,disabled)                 \
+ 	-Dllvm=$(if $(MESON_GEN_LLVM_STUB),enabled,disabled)                         \
++	-Damd-use-llvm=$(if $(MESON_GEN_LLVM_STUB),true,false)                       \
+ 	-Damdgpu-virtio=$(if $(filter true,$(BOARD_MESA3D_AMDGPU_VIRTIO)),true,false)\
+ 	-Dcpp_rtti=false                                                             \
+ 	-Dlmsensors=disabled                                                         \
+-- 
+2.43.0

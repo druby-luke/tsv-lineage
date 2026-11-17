@@ -1,0 +1,255 @@
+From c0235eff650720faff05452a06a0a09479b3621f Mon Sep 17 00:00:00 2001
+From: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Date: Thu, 10 Sep 2026 15:31:26 +0300
+Subject: [PATCH 14/19] freedreno/a5xx: program the 2D source and use BLIT_OP_SCALE
+
+On a512 a 2D blit does nothing whatsoever: the destination keeps
+whatever it held before, and no fault or error is raised. On a530 it
+mostly works, but a converting blit such as r16f to rg16f comes back
+wrong. It looks like a512 (and maybe other GPUs) silently ignores
+CP_BLIT(BLIT_OP_COPY), but perform no actual operation without reporting
+any error to the caller side. The packet is consumed, the CP runs on
+past it, the 2D registers read back exactly as programmed, but no memory
+transaction is issued.
+
+Describe missing registers and program them, and ask for BLIT_OP_SCALE.
+Both CP_BLIT sites need it: the buffer path describes its source as the
+single row of R8_UNORM it copies.
+
+BLIT_OP_SCALE converts through the intermediate format, so a snorm copy
+would turn -128 into -127. Blit snorm formats as the matching unorm
+one, as a6xx does.
+
+Measured against u_blitter over every identity pair of 20 renderable
+formats, with the destination pre-filled so an untouched buffer cannot
+be mistaken for a correct result: a512 goes from 0/20 to 20/20 and a530
+from 19/20 to 20/20, r16f to rg16f being the pair a530 gained.
+
+Assisted-by: LLM
+Signed-off-by: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45483>
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Upstream-commit: c0235eff650720faff05452a06a0a09479b3621f
+Source: https://gitlab.freedesktop.org/mesa/mesa/-/commit/c0235eff650720faff05452a06a0a09479b3621f
+
+---
+ src/freedreno/registers/adreno/a5xx.xml          |   38 +++++++++--
+ src/gallium/drivers/freedreno/a5xx/fd5_blitter.c |   74 ++++++++++++++++++++--
+ 2 files changed, 98 insertions(+), 14 deletions(-)
+
+diff --git a/src/freedreno/registers/adreno/a5xx.xml b/src/freedreno/registers/adreno/a5xx.xml
+index b8daf9b702fd9bdde34c96594261d480a6fa59d5..549f2794914313bfcb5f5db049aca10a260b22ce 100644
+--- a/src/freedreno/registers/adreno/a5xx.xml
++++ b/src/freedreno/registers/adreno/a5xx.xml
+@@ -2752,6 +2752,36 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
+ 		src via sampler, to enable scaling??)  0x2040 also used in this
+ 		case.
+ 	 -->
++	<bitset name="a5xx_2d_surf_info" inline="yes">
++		<bitfield name="COLOR_FORMAT" low="0" high="7" type="a5xx_color_fmt"/>
++		<bitfield name="TILE_MODE" low="8" high="9" type="a5xx_tile_mode"/>
++		<bitfield name="COLOR_SWAP" low="10" high="11" type="a3xx_color_swap"/>
++		<!-- b12 seems to be set when UBWC "FLAGS" buffer enabled -->
++		<bitfield name="FLAGS" pos="12" type="boolean"/>
++		<bitfield name="SRGB" pos="13" type="boolean"/>
++	</bitset>
++
++	<bitset name="a5xx_sp_a2d_output_info" inline="yes">
++		<bitfield name="HALF_PRECISION" pos="0" type="boolean"/>
++		<bitfield name="IFMT_TYPE" low="1" high="2" type="adreno_2d_output_ifmt_type"/>
++		<bitfield name="COLOR_FORMAT" low="3" high="10" type="a5xx_color_fmt"/>
++		<bitfield name="SRGB" pos="11" type="boolean"/>
++	</bitset>
++
++	<!-- The source the 2D core samples through, the same block as a6xx's
++	     TPL1_A2D_SRC_TEXTURE_*: -->
++	<reg32 offset="0x2000" name="TPL1_A2D_SRC_TEXTURE_INFO" type="a5xx_2d_surf_info"/>
++	<reg32 offset="0x2001" name="TPL1_A2D_SRC_TEXTURE_SIZE">
++		<bitfield name="WIDTH" low="0" high="14" type="uint"/>
++		<bitfield name="HEIGHT" low="15" high="29" type="uint"/>
++	</reg32>
++	<reg64 offset="0x2002" name="TPL1_A2D_SRC_TEXTURE_BASE" type="address"/>
++	<reg32 offset="0x2004" name="TPL1_A2D_SRC_TEXTURE_PITCH">
++		<bitfield name="PITCH" low="9" high="23" shr="6" type="uint"/>
++	</reg32>
++
++	<reg32 offset="0x2040" name="SP_A2D_OUTPUT_INFO" type="a5xx_sp_a2d_output_info"/>
++
+ 	<bitset name="a5xx_2d_blit_cntl" inline="yes">
+ 		<bitfield name="ROP" low="23" high="26" type="a3xx_rop_code"/>
+ 		<bitfield name="IFMT" low="28" high="30" type="adreno_2d_ifmt"/>
+@@ -2764,14 +2794,6 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
+ 	<reg32 offset="0x2103" name="RB_2D_SRC_SOLID_DW2"/>
+ 	<reg32 offset="0x2104" name="RB_2D_SRC_SOLID_DW3"/>
+ 
+-	<bitset name="a5xx_2d_surf_info" inline="yes">
+-		<bitfield name="COLOR_FORMAT" low="0" high="7" type="a5xx_color_fmt"/>
+-		<bitfield name="TILE_MODE" low="8" high="9" type="a5xx_tile_mode"/>
+-		<bitfield name="COLOR_SWAP" low="10" high="11" type="a3xx_color_swap"/>
+-		<!-- b12 seems to be set when UBWC "FLAGS" buffer enabled -->
+-		<bitfield name="FLAGS" pos="12" type="boolean"/>
+-		<bitfield name="SRGB" pos="13" type="boolean"/>
+-	</bitset>
+ 
+ 	<reg32 offset="0x2107" name="RB_2D_SRC_INFO" type="a5xx_2d_surf_info"/>
+ 	<reg64 offset="0x2108" name="RB_2D_SRC" type="address"/>
+diff --git a/src/gallium/drivers/freedreno/a5xx/fd5_blitter.c b/src/gallium/drivers/freedreno/a5xx/fd5_blitter.c
+index 6bb5594b2ed2d976e592c49d899212ffeb941fcb..0a8b2fc7b57634b9f624776ac6c1ce793b8d4082 100644
+--- a/src/gallium/drivers/freedreno/a5xx/fd5_blitter.c
++++ b/src/gallium/drivers/freedreno/a5xx/fd5_blitter.c
+@@ -52,6 +52,7 @@ ok_format(enum pipe_format fmt)
+    case PIPE_FORMAT_R10SG10SB10SA2U_NORM:
+    case PIPE_FORMAT_B10G10R10A2_UINT:
+    case PIPE_FORMAT_R10G10B10A2_UINT:
++   case PIPE_FORMAT_B10G10R10X2_UNORM:
+       return false;
+    default:
+       break;
+@@ -381,11 +382,24 @@ emit_blit_buffer(struct fd_ringbuffer *ring, const struct pipe_blit_info *info)
+       OUT_RING(ring, A5XX_GRAS_2D_DST_INFO_COLOR_FORMAT(RB5_R8_UNORM) |
+                         A5XX_GRAS_2D_DST_INFO_COLOR_SWAP(WZYX));
+ 
++      OUT_PKT4(ring, REG_A5XX_TPL1_A2D_SRC_TEXTURE_INFO, 5);
++      OUT_RING(ring, A5XX_TPL1_A2D_SRC_TEXTURE_INFO_COLOR_FORMAT(RB5_R8_UNORM) |
++                        A5XX_TPL1_A2D_SRC_TEXTURE_INFO_TILE_MODE(TILE5_LINEAR) |
++                        A5XX_TPL1_A2D_SRC_TEXTURE_INFO_COLOR_SWAP(WZYX));
++      OUT_RING(ring, A5XX_TPL1_A2D_SRC_TEXTURE_SIZE_WIDTH(sshift + w) |
++                        A5XX_TPL1_A2D_SRC_TEXTURE_SIZE_HEIGHT(1));
++      OUT_RELOC(ring, src->bo, soff, 0, 0);
++      OUT_RING(ring, A5XX_TPL1_A2D_SRC_TEXTURE_PITCH_PITCH(p));
++
++      OUT_PKT4(ring, REG_A5XX_SP_A2D_OUTPUT_INFO, 1);
++      OUT_RING(ring, A5XX_SP_A2D_OUTPUT_INFO_IFMT_TYPE(OUTPUT_IFMT_2D_FLOAT) |
++                        A5XX_SP_A2D_OUTPUT_INFO_COLOR_FORMAT(RB5_R8_UNORM));
++
+       /*
+        * Blit command:
+        */
+       OUT_PKT7(ring, CP_BLIT, 5);
+-      OUT_RING(ring, CP_BLIT_0_OP(BLIT_OP_COPY));
++      OUT_RING(ring, CP_BLIT_0_OP(BLIT_OP_SCALE));
+       OUT_RING(ring, CP_BLIT_1_SRC_X1(sshift) | CP_BLIT_1_SRC_Y1(0));
+       OUT_RING(ring, CP_BLIT_2_SRC_X2(sshift + w - 1) | CP_BLIT_2_SRC_Y2(0));
+       OUT_RING(ring, CP_BLIT_3_DST_X1(dshift) | CP_BLIT_3_DST_Y1(0));
+@@ -407,6 +421,7 @@ emit_blit(struct fd_ringbuffer *ring, const struct pipe_blit_info *info)
+    enum a5xx_color_fmt sfmt, dfmt;
+    enum a5xx_tile_mode stile, dtile;
+    enum a3xx_color_swap sswap, dswap;
++   bool ssrgb, dsrgb;
+    unsigned spitch, dpitch;
+    unsigned sx1, sy1, sx2, sy2;
+    unsigned dx1, dy1, dx2, dy2;
+@@ -423,6 +438,11 @@ emit_blit(struct fd_ringbuffer *ring, const struct pipe_blit_info *info)
+    sswap = fd5_pipe2swap(info->src.format);
+    dswap = fd5_pipe2swap(info->dst.format);
+ 
++   ssrgb = util_format_is_srgb(info->src.format);
++   dsrgb = util_format_is_srgb(info->dst.format);
++   if (ssrgb == dsrgb)
++      ssrgb = dsrgb = false;
++
+    spitch = fd_resource_pitch(src, info->src.level);
+    dpitch = fd_resource_pitch(dst, info->dst.level);
+ 
+@@ -465,7 +485,8 @@ emit_blit(struct fd_ringbuffer *ring, const struct pipe_blit_info *info)
+       OUT_PKT4(ring, REG_A5XX_RB_2D_SRC_INFO, 9);
+       OUT_RING(ring, A5XX_RB_2D_SRC_INFO_COLOR_FORMAT(sfmt) |
+                         A5XX_RB_2D_SRC_INFO_TILE_MODE(stile) |
+-                        A5XX_RB_2D_SRC_INFO_COLOR_SWAP(sswap));
++                        A5XX_RB_2D_SRC_INFO_COLOR_SWAP(sswap) |
++                        COND(ssrgb, A5XX_RB_2D_SRC_INFO_SRGB));
+       OUT_RELOC(ring, src->bo, soff, 0, 0); /* RB_2D_SRC_LO/HI */
+       OUT_RING(ring, A5XX_RB_2D_SRC_SIZE_PITCH(spitch) |
+                         A5XX_RB_2D_SRC_SIZE_ARRAY_PITCH(sarray_pitch));
+@@ -478,7 +499,8 @@ emit_blit(struct fd_ringbuffer *ring, const struct pipe_blit_info *info)
+       OUT_PKT4(ring, REG_A5XX_GRAS_2D_SRC_INFO, 1);
+       OUT_RING(ring, A5XX_GRAS_2D_SRC_INFO_COLOR_FORMAT(sfmt) |
+                         A5XX_GRAS_2D_SRC_INFO_TILE_MODE(stile) |
+-                        A5XX_GRAS_2D_SRC_INFO_COLOR_SWAP(sswap));
++                        A5XX_GRAS_2D_SRC_INFO_COLOR_SWAP(sswap) |
++                        COND(ssrgb, A5XX_GRAS_2D_SRC_INFO_SRGB));
+ 
+       /*
+        * Emit destination:
+@@ -486,7 +508,8 @@ emit_blit(struct fd_ringbuffer *ring, const struct pipe_blit_info *info)
+       OUT_PKT4(ring, REG_A5XX_RB_2D_DST_INFO, 9);
+       OUT_RING(ring, A5XX_RB_2D_DST_INFO_COLOR_FORMAT(dfmt) |
+                         A5XX_RB_2D_DST_INFO_TILE_MODE(dtile) |
+-                        A5XX_RB_2D_DST_INFO_COLOR_SWAP(dswap));
++                        A5XX_RB_2D_DST_INFO_COLOR_SWAP(dswap) |
++                        COND(dsrgb, A5XX_RB_2D_DST_INFO_SRGB));
+       OUT_RELOC(ring, dst->bo, doff, 0, 0); /* RB_2D_DST_LO/HI */
+       OUT_RING(ring, A5XX_RB_2D_DST_SIZE_PITCH(dpitch) |
+                         A5XX_RB_2D_DST_SIZE_ARRAY_PITCH(darray_pitch));
+@@ -499,13 +522,42 @@ emit_blit(struct fd_ringbuffer *ring, const struct pipe_blit_info *info)
+       OUT_PKT4(ring, REG_A5XX_GRAS_2D_DST_INFO, 1);
+       OUT_RING(ring, A5XX_GRAS_2D_DST_INFO_COLOR_FORMAT(dfmt) |
+                         A5XX_GRAS_2D_DST_INFO_TILE_MODE(dtile) |
+-                        A5XX_GRAS_2D_DST_INFO_COLOR_SWAP(dswap));
++                        A5XX_GRAS_2D_DST_INFO_COLOR_SWAP(dswap) |
++                        COND(dsrgb, A5XX_GRAS_2D_DST_INFO_SRGB));
++
++      OUT_PKT4(ring, REG_A5XX_TPL1_A2D_SRC_TEXTURE_INFO, 5);
++      OUT_RING(ring, A5XX_TPL1_A2D_SRC_TEXTURE_INFO_COLOR_FORMAT(sfmt) |
++                        A5XX_TPL1_A2D_SRC_TEXTURE_INFO_TILE_MODE(stile) |
++                        A5XX_TPL1_A2D_SRC_TEXTURE_INFO_COLOR_SWAP(sswap) |
++                        COND(ssrgb, A5XX_TPL1_A2D_SRC_TEXTURE_INFO_SRGB));
++      OUT_RING(ring, A5XX_TPL1_A2D_SRC_TEXTURE_SIZE_WIDTH(
++                        u_minify(src->b.b.width0, info->src.level)) |
++                        A5XX_TPL1_A2D_SRC_TEXTURE_SIZE_HEIGHT(
++                           u_minify(src->b.b.height0, info->src.level)));
++      OUT_RELOC(ring, src->bo, soff, 0, 0);
++      OUT_RING(ring, A5XX_TPL1_A2D_SRC_TEXTURE_PITCH_PITCH(spitch));
++
++      enum adreno_2d_output_ifmt_type ifmt_type = OUTPUT_IFMT_2D_FLOAT;
++      if (util_format_is_depth_or_stencil(info->dst.format))
++         ifmt_type = OUTPUT_IFMT_2D_FLOAT;
++      else if (util_format_is_pure_uint(info->dst.format))
++         ifmt_type = OUTPUT_IFMT_2D_UINT;
++      else if (util_format_is_pure_sint(info->dst.format))
++         ifmt_type = OUTPUT_IFMT_2D_SINT;
++
++      OUT_PKT4(ring, REG_A5XX_SP_A2D_OUTPUT_INFO, 1);
++      OUT_RING(ring, COND(util_format_is_float16(info->src.format) ||
++                             info->src.format == PIPE_FORMAT_R11G11B10_FLOAT,
++                          A5XX_SP_A2D_OUTPUT_INFO_HALF_PRECISION) |
++                        A5XX_SP_A2D_OUTPUT_INFO_IFMT_TYPE(ifmt_type) |
++                        A5XX_SP_A2D_OUTPUT_INFO_COLOR_FORMAT(dfmt) |
++                        COND(dsrgb, A5XX_SP_A2D_OUTPUT_INFO_SRGB));
+ 
+       /*
+        * Blit command:
+        */
+       OUT_PKT7(ring, CP_BLIT, 5);
+-      OUT_RING(ring, CP_BLIT_0_OP(BLIT_OP_COPY));
++      OUT_RING(ring, CP_BLIT_0_OP(BLIT_OP_SCALE));
+       OUT_RING(ring, CP_BLIT_1_SRC_X1(sx1) | CP_BLIT_1_SRC_Y1(sy1));
+       OUT_RING(ring, CP_BLIT_2_SRC_X2(sx2) | CP_BLIT_2_SRC_Y2(sy2));
+       OUT_RING(ring, CP_BLIT_3_DST_X1(dx1) | CP_BLIT_3_DST_Y1(dy1));
+@@ -520,12 +572,22 @@ bool
+ fd5_blitter_blit(struct fd_context *ctx,
+                  const struct pipe_blit_info *info) assert_dt
+ {
++   struct pipe_blit_info unorm_info;
+    struct fd_batch *batch;
+ 
+    if (!can_do_blit(info)) {
+       return false;
+    }
+ 
++   /* An snorm blit would turn -128 into -127; copy the bits instead. */
++   if (info->src.format == info->dst.format &&
++       util_format_is_snorm(info->src.format)) {
++      unorm_info = *info;
++      unorm_info.src.format = unorm_info.dst.format =
++         util_format_snorm_to_unorm(info->src.format);
++      info = &unorm_info;
++   }
++
+    struct fd_resource *src = fd_resource(info->src.resource);
+    struct fd_resource *dst = fd_resource(info->dst.resource);
+ 
+-- 
+2.43.0

@@ -1,0 +1,186 @@
+From 7f1be0966c8807a3bfd48163b12cea7cda29f658 Mon Sep 17 00:00:00 2001
+From: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Date: Mon, 5 Oct 2026 10:39:15 +0300
+Subject: [PATCH 18/19] freedreno/a5xx: partition the colour cache for the part's SP
+ cores
+
+RB_CCU_CNTL splits the colour cache between the SP cores, and freedreno
+always programs the four-core a530 partition, for GMEM rendering and for
+bypass alike. Every other a5xx part has one or two cores, so the cache
+is carved up for cores that do not exist.
+
+Describe RB_CCU_CNTL's offset and cache size fields, which are similar
+to a6xx's COLOR_OFFSET, COLOR_CACHE_SIZE, DEPTH_OFFSET and
+DEPTH_CACHE_SIZE, only at lower bit positions, and program each part's
+own GMEM partition with them. Derive the bypass one from the SP core
+count, which gives each core 32 units. This also covers the
+bypass write before an LRZ clear.
+
+Fixes: 224b26728296 ("freedreno/a5xx: enable a510")
+Fixes: 07e1233c6157 ("freedreno: Enable Adreno 508, 509 and 512")
+Fixes: dc6f7045665e ("freedreno: Enable A506")
+Fixes: afb7b17fddca ("freedreno: Enable A505")
+Assisted-by: LLM
+Signed-off-by: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45481>
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Upstream-commit: 7f1be0966c8807a3bfd48163b12cea7cda29f658
+Source: https://gitlab.freedesktop.org/mesa/mesa/-/commit/7f1be0966c8807a3bfd48163b12cea7cda29f658
+Backport: refresh the existing compute-a540 decoder fixture context and retain all upstream CCU reference updates.
+
+---
+ src/freedreno/registers/adreno/a5xx.xml        |   13 ++++++++++
+ src/freedreno/tests/reference/compute-a540.log |    6 ++---
+ src/gallium/drivers/freedreno/a5xx/fd5_draw.c  |    2 +-
+ src/gallium/drivers/freedreno/a5xx/fd5_emit.h  |   30 ++++++++++++++++++++++++
+ src/gallium/drivers/freedreno/a5xx/fd5_gmem.c  |    6 ++---
+ 5 files changed, 48 insertions(+), 9 deletions(-)
+
+diff --git a/src/freedreno/registers/adreno/a5xx.xml b/src/freedreno/registers/adreno/a5xx.xml
+index f78363643f365e538d9539ab89de16795ac73ff9..96a2eddb9172c4faf2426f342754f7cbc12f7923 100644
+--- a/src/freedreno/registers/adreno/a5xx.xml
++++ b/src/freedreno/registers/adreno/a5xx.xml
+@@ -61,6 +61,12 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
+ 	<value name="TILE5_3" value="3"/>
+ </enum>
+ 
++<enum name="a5xx_ccu_cache_size">
++	<value value="0x0" name="CCU_CACHE_SIZE_FULL"/>
++	<value value="0x1" name="CCU_CACHE_SIZE_HALF"/>
++	<value value="0x2" name="CCU_CACHE_SIZE_QUARTER"/>
++</enum>
++
+ <enum name="a5xx_vtx_fmt" prefix="chipset">
+ 	<value value="0x03" name="VFMT5_8_UNORM"/>
+ 	<value value="0x04" name="VFMT5_8_SNORM"/>
+@@ -1470,7 +1476,12 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
+ 	<reg32 offset="0x0cc6" name="RB_MODE_CNTL">
+ 		<bitfield name="HIGHESTBANKBIT" low="1" high="2" type="uint"/>
+ 	</reg32>
+-	<reg32 offset="0x0cc7" name="RB_CCU_CNTL"/> <!-- always b0056080 or 10000000? -->
++	<reg32 offset="0x0cc7" name="RB_CCU_CNTL">
++		<bitfield name="DEPTH_CACHE_SIZE" low="6" high="7" type="a5xx_ccu_cache_size"/>
++		<bitfield name="DEPTH_OFFSET" low="8" high="18" type="uint"/>
++		<bitfield name="COLOR_CACHE_SIZE" low="19" high="20" type="a5xx_ccu_cache_size"/>
++		<bitfield name="COLOR_OFFSET" low="21" high="31" type="uint"/>
++	</reg32>
+ 	<reg32 offset="0x0cd0" name="RB_PERFCTR_RB_SEL_0" type="a5xx_rb_perfcounter_select"/>
+ 	<reg32 offset="0x0cd1" name="RB_PERFCTR_RB_SEL_1" type="a5xx_rb_perfcounter_select"/>
+ 	<reg32 offset="0x0cd2" name="RB_PERFCTR_RB_SEL_2" type="a5xx_rb_perfcounter_select"/>
+diff --git a/src/freedreno/tests/reference/compute-a540.log b/src/freedreno/tests/reference/compute-a540.log
+index 0e6d1f07db54c159e72186d87d881c86d09a7c67..50a99f0ce37f3932f3e32376bd4d00b81dd847e6 100644
+--- a/src/freedreno/tests/reference/compute-a540.log
++++ b/src/freedreno/tests/reference/compute-a540.log
+@@ -305,7 +305,7 @@ cmdstream[0]: 207 dwords
+ 0000000500190148:		0000: 48e7c09e 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+ *
+ 		write RB_CCU_CNTL (0cc7)
+-			RB_CCU_CNTL: 0x7c13c080
++			RB_CCU_CNTL: { DEPTH_CACHE_SIZE = CCU_CACHE_SIZE_QUARTER | DEPTH_OFFSET = 960 | COLOR_CACHE_SIZE = CCU_CACHE_SIZE_QUARTER | COLOR_OFFSET = 992 }
+ 00000005001901c4:		0000: 400cc701 7c13c080
+ 		opcode: CP_PREEMPT_ENABLE_LOCAL (6a) (2 dwords)
+ 00000005001901cc:		0000: 70ea0001 00000001
+@@ -370,7 +370,7 @@ cmdstream[0]: 207 dwords
+ 		opcode: CP_WAIT_FOR_IDLE (26) (1 dwords)
+ 0000000500190244:		0000: 70268000
+ 		write RB_CCU_CNTL (0cc7)
+-			RB_CCU_CNTL: 0x10000000
++			RB_CCU_CNTL: { DEPTH_CACHE_SIZE = CCU_CACHE_SIZE_FULL | DEPTH_OFFSET = 0 | COLOR_CACHE_SIZE = CCU_CACHE_SIZE_FULL | COLOR_OFFSET = 128 }
+ 0000000500190248:		0000: 400cc701 10000000
+ 		write GRAS_SC_WINDOW_SCISSOR_TL (e0ea)
+ 			GRAS_SC_WINDOW_SCISSOR_TL: { X = 0 | Y = 0 }
+@@ -710,7 +710,7 @@ cmdstream[0]: 207 dwords
+ !+	00000001			CP_SCRATCH[0].REG: 1
+ !+	00100000			RB_DBG_ECO_CNTL: 0x100000
+ !+	00000044			RB_MODE_CNTL: { HIGHESTBANKBIT = 2 | 0x40 }
+-!+	10000000			RB_CCU_CNTL: 0x10000000
++!+	10000000			RB_CCU_CNTL: { DEPTH_CACHE_SIZE = CCU_CACHE_SIZE_FULL | DEPTH_OFFSET = 0 | COLOR_CACHE_SIZE = CCU_CACHE_SIZE_FULL | COLOR_OFFSET = 128 }
+ !+	0000001f			PC_MODE_CNTL: 0x1f
+  +	00000000			PC_TESSFACTOR_ADDR: 0
+ !+	00000080			HLSQ_TIMEOUT_THRESHOLD_0: 0x80
+diff --git a/src/gallium/drivers/freedreno/a5xx/fd5_draw.c b/src/gallium/drivers/freedreno/a5xx/fd5_draw.c
+index f0dff4ee3c9a88f3354d90e1d8ad79d421151ea3..4f0f47fea67d1a3434b0cdcc29e590a9b5a53c83 100644
+--- a/src/gallium/drivers/freedreno/a5xx/fd5_draw.c
++++ b/src/gallium/drivers/freedreno/a5xx/fd5_draw.c
+@@ -158,7 +158,7 @@ fd5_clear_lrz(struct fd_batch *batch, struct fd_resource *zsbuf, double depth)
+    OUT_WFI5(ring);
+ 
+    OUT_PKT4(ring, REG_A5XX_RB_CCU_CNTL, 1);
+-   OUT_RING(ring, 0x10000000);
++   OUT_RING(ring, fd5_ccu_cntl_bypass(batch->ctx->screen));
+ 
+    OUT_PKT4(ring, REG_A5XX_HLSQ_UPDATE_CNTL, 1);
+    OUT_RING(ring, 0x20fffff);
+diff --git a/src/gallium/drivers/freedreno/a5xx/fd5_emit.h b/src/gallium/drivers/freedreno/a5xx/fd5_emit.h
+index 7add21ad4003af9f11c615e89f146ef846e207a6..aa48e60757f153a42af30193aa231fd0c1256a77 100644
+--- a/src/gallium/drivers/freedreno/a5xx/fd5_emit.h
++++ b/src/gallium/drivers/freedreno/a5xx/fd5_emit.h
+@@ -51,6 +51,36 @@ struct fd5_emit {
+    unsigned streamout_mask;
+ };
+ 
++static inline uint32_t
++fd5_ccu_cntl_gmem(const struct fd_screen *screen)
++{
++   unsigned cores = screen->info->num_sp_cores;
++   enum a5xx_ccu_cache_size size;
++
++   switch (screen->gpu_id) {
++   case 505:
++   case 506:
++   case 510:
++      size = CCU_CACHE_SIZE_FULL;
++      break;
++   default:
++      size = CCU_CACHE_SIZE_QUARTER;
++      break;
++   }
++
++   return A5XX_RB_CCU_CNTL_DEPTH_CACHE_SIZE(size) |
++          A5XX_RB_CCU_CNTL_DEPTH_OFFSET(1024 - 16 * cores) |
++          A5XX_RB_CCU_CNTL_COLOR_CACHE_SIZE(size) |
++          A5XX_RB_CCU_CNTL_COLOR_OFFSET(1024 - 8 * cores);
++}
++
++/* Bypass mode gives each SP core 32 units of the colour cache. */
++static inline uint32_t
++fd5_ccu_cntl_bypass(const struct fd_screen *screen)
++{
++   return A5XX_RB_CCU_CNTL_COLOR_OFFSET(32 * screen->info->num_sp_cores);
++}
++
+ static inline enum a5xx_color_fmt
+ fd5_emit_format(struct pipe_surface *surf)
+ {
+diff --git a/src/gallium/drivers/freedreno/a5xx/fd5_gmem.c b/src/gallium/drivers/freedreno/a5xx/fd5_gmem.c
+index cdece220b0ec1ec513381df46229ada03b420f76..31ba80332fd0ad518c3bf097812e22c1375947cf 100644
+--- a/src/gallium/drivers/freedreno/a5xx/fd5_gmem.c
++++ b/src/gallium/drivers/freedreno/a5xx/fd5_gmem.c
+@@ -399,10 +399,9 @@ fd5_emit_tile_init(struct fd_batch *batch) assert_dt
+    OUT_PKT4(ring, REG_A5XX_VFD_POWER_CNTL, 1);
+    OUT_RING(ring, ctx->screen->info->num_sp_cores - 1); /* VFD_POWER_CNTL */
+ 
+-   /* 0x10000000 for BYPASS.. 0x7c13c080 for GMEM: */
+    fd_wfi(batch, ring);
+    OUT_PKT4(ring, REG_A5XX_RB_CCU_CNTL, 1);
+-   OUT_RING(ring, 0x7c13c080); /* RB_CCU_CNTL */
++   OUT_RING(ring, fd5_ccu_cntl_gmem(ctx->screen));
+ 
+    emit_zs(ring, &pfb->zsbuf, batch->gmem_state);
+    emit_mrt(ring, pfb->nr_cbufs, pfb->cbufs, batch->gmem_state);
+@@ -721,10 +720,9 @@ fd5_emit_sysmem_prep(struct fd_batch *batch) assert_dt
+    OUT_PKT4(ring, REG_A5XX_VFD_POWER_CNTL, 1);
+    OUT_RING(ring, ctx->screen->info->num_sp_cores - 1); /* VFD_POWER_CNTL */
+ 
+-   /* 0x10000000 for BYPASS.. 0x7c13c080 for GMEM: */
+    fd_wfi(batch, ring);
+    OUT_PKT4(ring, REG_A5XX_RB_CCU_CNTL, 1);
+-   OUT_RING(ring, 0x10000000); /* RB_CCU_CNTL */
++   OUT_RING(ring, fd5_ccu_cntl_bypass(ctx->screen));
+ 
+    OUT_PKT4(ring, REG_A5XX_RB_CNTL, 1);
+    OUT_RING(ring, A5XX_RB_CNTL_WIDTH(0) | A5XX_RB_CNTL_HEIGHT(0) |
+-- 
+2.43.0

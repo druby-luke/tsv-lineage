@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Chris Paslawski <chris@paslawski.me>
 Date: Wed, 4 Nov 2026 14:32:02 -0800
-Subject: [PATCH] freedreno: use sysmem when the smallest GMEM tiles cannot fit
+Subject: [PATCH 11/19] freedreno: use sysmem when the smallest GMEM tiles cannot fit
 
 Once bins reach the hardware tile alignment, adding bins cannot reduce
 their storage requirements. Stop the otherwise unbounded layout search,
@@ -16,11 +16,18 @@ experimental shader/register-allocation changes are needed.
 Origin: Jetha Chan's ThinkSmart View port, adapted to Lineage Mesa 26.2.3
 Source: https://github.com/jethac/lenovo-thinksmart-view/blob/1f99f7f09c26074d53064d7bb1fada262cbef10a/streams/audio-dsp/patches/0001-freedreno-gmem-no-fit-sysmem.patch
 Original-commit: 712ef9414fa111d1a7fd2a1134b217b32de09f46
-Base-commit: 400e673cf8ba515d3aace56ed3acc3bb300869a5
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
 Apply in filename order within this project.
+Backport: refresh the existing device fix onto Mesa 26.2.7.
 
 ---
+ src/gallium/drivers/freedreno/freedreno_gmem.c |   23 ++++++++++++++++++++++-
+ src/gallium/drivers/freedreno/freedreno_gmem.h |    1 +
+ 2 files changed, 23 insertions(+), 1 deletion(-)
+
 diff --git a/src/gallium/drivers/freedreno/freedreno_gmem.c b/src/gallium/drivers/freedreno/freedreno_gmem.c
+index a4075df8d178e66b3a32690eb1ba42548a750e10..cb547236ae6e45b328695ce2717434ecf5f44fc9 100644
 --- a/src/gallium/drivers/freedreno/freedreno_gmem.c
 +++ b/src/gallium/drivers/freedreno/freedreno_gmem.c
 @@ -233,6 +233,15 @@ calc_nbins(struct gmem_key *key, struct fd_gmem_stateobj *gmem)
@@ -68,6 +75,7 @@ diff --git a/src/gallium/drivers/freedreno/freedreno_gmem.c b/src/gallium/driver
        trace_render_gmem(&batch->trace, batch->gmem, gmem->nbins_x, gmem->nbins_y,
                          gmem->bin_w, gmem->bin_h);
 diff --git a/src/gallium/drivers/freedreno/freedreno_gmem.h b/src/gallium/drivers/freedreno/freedreno_gmem.h
+index 5208675fc58588cf07afc2d422a00dd598cfe843..6e7b9183a3180ef3b6be6da0d78ee1856d7e26fa 100644
 --- a/src/gallium/drivers/freedreno/freedreno_gmem.h
 +++ b/src/gallium/drivers/freedreno/freedreno_gmem.h
 @@ -44,6 +44,7 @@ struct fd_gmem_stateobj {
@@ -78,3 +86,5 @@ diff --git a/src/gallium/drivers/freedreno/freedreno_gmem.h b/src/gallium/driver
  
     struct fd_vsc_pipe vsc_pipe[32];
     struct fd_tile *tile;
+-- 
+2.43.0

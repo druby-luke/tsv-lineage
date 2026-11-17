@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
+  <remote name="freedesktop" fetch="https://gitlab.freedesktop.org" />
   <project name="LineageOS/android_device_mainline_common" path="device/mainline/common" remote="github" revision="lineage-24.0" />
   <project name="LineageOS/android_device_mainline_qcom-common" path="device/mainline/qcom-common" remote="github" revision="lineage-24.0" />
   <project name="LineageOS/android_hardware_mainline_common" path="hardware/mainline/common" remote="github" revision="lineage-24.0" />
@@ -11,7 +12,7 @@
   <project name="LineageOS/android_external_drm_hwcomposer-upstream" path="external/drm_hwcomposer-upstream" remote="github" revision="lineage-24.0" />
   <project name="LineageOS/android_external_libdisplay-info-upstream" path="external/libdisplay-info-upstream" remote="github" revision="lineage-24.0" />
   <project name="LineageOS/android_external_minigbm-upstream" path="external/minigbm-upstream" remote="github" revision="lineage-24.0" />
-  <project name="LineageOS/android_external_mesa" path="external/mesa" remote="github" revision="lineage-24.0" />
+  <project name="mesa/mesa" path="external/mesa" remote="freedesktop" revision="b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae" upstream="refs/tags/mesa-26.2.7" clone-depth="1" />
   <project name="LineageOS/android_prebuilts_mesa-build-dep" path="prebuilts/mesa-build-dep" remote="github" revision="lineage-24.0" />
   <project name="LineageOS/android_external_linux-firmware-mainline" path="external/linux-firmware-mainline" remote="github" revision="lineage-24.0" />
   <project name="LineageOS/android_external_tinyhal" path="external/tinyhal" remote="github" revision="lineage-24.0" />

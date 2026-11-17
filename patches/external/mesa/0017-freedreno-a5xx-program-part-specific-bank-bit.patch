@@ -1,0 +1,179 @@
+From 4fa3294238ac68c1ccab58e7a94d6d83dac98ca7 Mon Sep 17 00:00:00 2001
+From: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Date: Sun, 4 Oct 2026 02:54:25 +0300
+Subject: [PATCH 17/19] freedreno/a5xx: program the highest bank bit of the part
+
+RB_MODE_CNTL and TPL1_MODE_CNTL carry the highest bank bit, which the
+kernel programs from the per-SoC UBWC configuration on every
+hw_init. Mesa rewrites both with msm8996's value on every batch
+and 2D blit, so on SoCs with a different hbb value, such as sdm630,
+sdm660 and msm8953, the texture pipe and render backend swizzle with a
+different bank bit than UCHE, which keeps the kernel's value.
+
+Describe the HIGHESTBANKBIT field of both registers, and derive it from
+highest_bank_bit reported by the kernel.
+
+Fixes: 07e1233c6157 ("freedreno: Enable Adreno 508, 509 and 512")
+Fixes: dc6f7045665e ("freedreno: Enable A506")
+Fixes: afb7b17fddca ("freedreno: Enable A505")
+Assisted-by: LLM
+Signed-off-by: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45481>
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Upstream-commit: 4fa3294238ac68c1ccab58e7a94d6d83dac98ca7
+Source: https://gitlab.freedesktop.org/mesa/mesa/-/commit/4fa3294238ac68c1ccab58e7a94d6d83dac98ca7
+Backport: omit the newer computerator tool, which is absent from Mesa 26.2.7; retain the runtime changes and decoder reference updates.
+Backport: refresh the existing compute-a540 decoder fixture contexts; preserve this branch's SP_MODE_CNTL decoding and all upstream bank-bit reference updates.
+
+---
+ src/freedreno/registers/adreno/a5xx.xml          |    8 ++++++--
+ src/freedreno/tests/reference/compute-a540.log   |    8 ++++----
+ src/gallium/drivers/freedreno/a5xx/fd5_blitter.c |   10 ++++++----
+ src/gallium/drivers/freedreno/a5xx/fd5_emit.c    |    5 +++--
+ 4 files changed, 19 insertions(+), 12 deletions(-)
+
+diff --git a/src/freedreno/registers/adreno/a5xx.xml b/src/freedreno/registers/adreno/a5xx.xml
+index a275460fab7ac11a47c7161cadc34ecd299b1711..f78363643f365e538d9539ab89de16795ac73ff9 100644
+--- a/src/freedreno/registers/adreno/a5xx.xml
++++ b/src/freedreno/registers/adreno/a5xx.xml
+@@ -1467,7 +1467,9 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
+ 
+ 	<reg32 offset="0x0cc4" name="RB_DBG_ECO_CNTL"/> <!-- always 00100000? -->
+ 	<reg32 offset="0x0cc5" name="RB_ADDR_MODE_CNTL" type="a5xx_address_mode"/>
+-	<reg32 offset="0x0cc6" name="RB_MODE_CNTL"/> <!-- always 00000044? -->
++	<reg32 offset="0x0cc6" name="RB_MODE_CNTL">
++		<bitfield name="HIGHESTBANKBIT" low="1" high="2" type="uint"/>
++	</reg32>
+ 	<reg32 offset="0x0cc7" name="RB_CCU_CNTL"/> <!-- always b0056080 or 10000000? -->
+ 	<reg32 offset="0x0cd0" name="RB_PERFCTR_RB_SEL_0" type="a5xx_rb_perfcounter_select"/>
+ 	<reg32 offset="0x0cd1" name="RB_PERFCTR_RB_SEL_1" type="a5xx_rb_perfcounter_select"/>
+@@ -1600,7 +1602,9 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
+ 	<reg32 offset="0x0edf" name="SP_POWERCTR_SP_SEL_3"/>
+ 
+ 	<reg32 offset="0x0f01" name="TPL1_ADDR_MODE_CNTL" type="a5xx_address_mode"/>
+-	<reg32 offset="0x0f02" name="TPL1_MODE_CNTL"/> <!-- always 00000544? -->
++	<reg32 offset="0x0f02" name="TPL1_MODE_CNTL">
++		<bitfield name="HIGHESTBANKBIT" low="7" high="8" type="uint"/>
++	</reg32>
+ 	<reg32 offset="0x0f10" name="TPL1_PERFCTR_TP_SEL_0" type="a5xx_tp_perfcounter_select"/>
+ 	<reg32 offset="0x0f11" name="TPL1_PERFCTR_TP_SEL_1" type="a5xx_tp_perfcounter_select"/>
+ 	<reg32 offset="0x0f12" name="TPL1_PERFCTR_TP_SEL_2" type="a5xx_tp_perfcounter_select"/>
+diff --git a/src/freedreno/tests/reference/compute-a540.log b/src/freedreno/tests/reference/compute-a540.log
+index 8032e0057b4ef21fd3e7c982f4eef2c799f027c3..0e6d1f07db54c159e72186d87d881c86d09a7c67 100644
+--- a/src/freedreno/tests/reference/compute-a540.log
++++ b/src/freedreno/tests/reference/compute-a540.log
+@@ -221,7 +221,7 @@ cmdstream[0]: 207 dwords
+ 			UNKNOWN_E293: 0
+ 00000005001900b0:		0000: 40e29202 00000000 00000000
+ 		write RB_MODE_CNTL (0cc6)
+-			RB_MODE_CNTL: 0x44
++			RB_MODE_CNTL: { HIGHESTBANKBIT = 2 | 0x40 }
+ 00000005001900bc:		0000: 480cc601 00000044
+ 		write RB_DBG_ECO_CNTL (0cc4)
+ 			RB_DBG_ECO_CNTL: 0x100000
+@@ -239,7 +239,7 @@ cmdstream[0]: 207 dwords
+ 			SP_DBG_ECO_CNTL: 0x800
+ 00000005001900e4:		0000: 400ec001 00000800
+ 		write TPL1_MODE_CNTL (0f02)
+-			TPL1_MODE_CNTL: 0x544
++			TPL1_MODE_CNTL: { HIGHESTBANKBIT = 2 | 0x444 }
+ 00000005001900ec:		0000: 400f0201 00000544
+ 		write HLSQ_TIMEOUT_THRESHOLD_0 (0e00)
+ 			HLSQ_TIMEOUT_THRESHOLD_0: 0x80
+@@ -709,7 +709,7 @@ cmdstream[0]: 207 dwords
+ 			draw[0] register values
+ !+	00000001			CP_SCRATCH[0].REG: 1
+ !+	00100000			RB_DBG_ECO_CNTL: 0x100000
+-!+	00000044			RB_MODE_CNTL: 0x44
++!+	00000044			RB_MODE_CNTL: { HIGHESTBANKBIT = 2 | 0x40 }
+ !+	10000000			RB_CCU_CNTL: 0x10000000
+ !+	0000001f			PC_MODE_CNTL: 0x1f
+  +	00000000			PC_TESSFACTOR_ADDR: 0
+@@ -724,7 +724,7 @@ cmdstream[0]: 207 dwords
+ !+	00000012			UCHE_CACHE_INVALIDATE: 0x12
+ !+	00000800			SP_DBG_ECO_CNTL: 0x800
+ !+	0000001e			SP_MODE_CNTL: 0x1e
+-!+	00000544			TPL1_MODE_CNTL: 0x544
++!+	00000544			TPL1_MODE_CNTL: { HIGHESTBANKBIT = 2 | 0x444 }
+ !+	3ff00010			GRAS_SU_POINT_MINMAX: { MIN = 1.000000 | MAX = 1023.000000 }
+ !+	00000008			GRAS_SU_POINT_SIZE: 0.500000
+  +	00000000			GRAS_SU_CONSERVATIVE_RAS_CNTL: 0
+diff --git a/src/gallium/drivers/freedreno/a5xx/fd5_blitter.c b/src/gallium/drivers/freedreno/a5xx/fd5_blitter.c
+index 0a8b2fc7b57634b9f624776ac6c1ce793b8d4082..e3fcfc25b874ccb68715c74888a1f14ae6977a7f 100644
+--- a/src/gallium/drivers/freedreno/a5xx/fd5_blitter.c
++++ b/src/gallium/drivers/freedreno/a5xx/fd5_blitter.c
+@@ -243,12 +243,14 @@ can_do_blit(const struct pipe_blit_info *info)
+ }
+ 
+ static void
+-emit_setup(struct fd_ringbuffer *ring, enum pipe_format dst_format)
++emit_setup(struct fd_ringbuffer *ring, const struct fd_screen *screen,
++           enum pipe_format dst_format)
+ {
+    enum a5xx_color_fmt dfmt = fd5_pipe2color(dst_format);
+    uint32_t blit_cntl = A5XX_RB_2D_BLIT_CNTL_ROP(ROP_COPY) |
+                         A5XX_RB_2D_BLIT_CNTL_IFMT(fd5_ifmt(dfmt)) |
+                         A5XX_RB_2D_BLIT_CNTL_UNK31;
++   uint32_t hbb = screen->highest_bank_bit - 13;
+ 
+    OUT_PKT4(ring, REG_A5XX_RB_RENDER_CNTL, 1);
+    OUT_RING(ring, 0x00000008);
+@@ -266,13 +268,13 @@ emit_setup(struct fd_ringbuffer *ring, enum pipe_format dst_format)
+    OUT_RING(ring, A5XX_RB_CNTL_BYPASS);
+ 
+    OUT_PKT4(ring, REG_A5XX_RB_MODE_CNTL, 1);
+-   OUT_RING(ring, 0x00000004); /* RB_MODE_CNTL */
++   OUT_RING(ring, A5XX_RB_MODE_CNTL_HIGHESTBANKBIT(hbb));
+ 
+    OUT_PKT4(ring, REG_A5XX_SP_MODE_CNTL, 1);
+    OUT_RING(ring, 0x0000000c); /* SP_MODE_CNTL */
+ 
+    OUT_PKT4(ring, REG_A5XX_TPL1_MODE_CNTL, 1);
+-   OUT_RING(ring, 0x00000344); /* TPL1_MODE_CNTL */
++   OUT_RING(ring, 0x00000244 | A5XX_TPL1_MODE_CNTL_HIGHESTBANKBIT(hbb));
+ 
+    OUT_PKT4(ring, REG_A5XX_HLSQ_MODE_CNTL, 1);
+    OUT_RING(ring, 0x00000002); /* HLSQ_MODE_CNTL */
+@@ -604,7 +606,7 @@ fd5_blitter_blit(struct fd_context *ctx,
+ 
+    fd_batch_update_queries(batch);
+ 
+-   emit_setup(batch->draw, info->dst.format);
++   emit_setup(batch->draw, batch->ctx->screen, info->dst.format);
+ 
+    if ((info->src.resource->target == PIPE_BUFFER) &&
+        (info->dst.resource->target == PIPE_BUFFER)) {
+diff --git a/src/gallium/drivers/freedreno/a5xx/fd5_emit.c b/src/gallium/drivers/freedreno/a5xx/fd5_emit.c
+index 7e569d1540ce3863288aee737785a00fc95c5da9..f3680d476488cf1ac2425048aecd02b9602b02ef 100644
+--- a/src/gallium/drivers/freedreno/a5xx/fd5_emit.c
++++ b/src/gallium/drivers/freedreno/a5xx/fd5_emit.c
+@@ -942,6 +942,7 @@ void
+ fd5_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
+ {
+    struct fd_context *ctx = batch->ctx;
++   uint32_t hbb = ctx->screen->highest_bank_bit - 13;
+ 
+    fd5_set_render_mode(ctx, ring, BYPASS);
+    fd5_cache_flush(batch, ring);
+@@ -987,7 +988,7 @@ fd5_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
+    OUT_RING(ring, 0x00000000); /* UNKNOWN_E293 */
+ 
+    OUT_PKT4(ring, REG_A5XX_RB_MODE_CNTL, 1);
+-   OUT_RING(ring, 0x00000044); /* RB_MODE_CNTL */
++   OUT_RING(ring, 0x00000040 | A5XX_RB_MODE_CNTL_HIGHESTBANKBIT(hbb));
+ 
+    OUT_PKT4(ring, REG_A5XX_RB_DBG_ECO_CNTL, 1);
+    OUT_RING(ring, 0x00100000 |
+@@ -1014,7 +1015,7 @@ fd5_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
+    }
+ 
+    OUT_PKT4(ring, REG_A5XX_TPL1_MODE_CNTL, 1);
+-   OUT_RING(ring, 0x00000544); /* TPL1_MODE_CNTL */
++   OUT_RING(ring, 0x00000444 | A5XX_TPL1_MODE_CNTL_HIGHESTBANKBIT(hbb));
+ 
+    OUT_PKT4(ring, REG_A5XX_HLSQ_TIMEOUT_THRESHOLD_0, 2);
+    OUT_RING(ring, 0x00000080); /* HLSQ_TIMEOUT_THRESHOLD_0 */
+-- 
+2.43.0

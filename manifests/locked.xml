@@ -3,6 +3,7 @@
   <!-- Generated from clean, synchronized LineageOS 24.0 sources with repo manifest -r. -->
   <remote name="aosp" fetch="https://android.googlesource.com" review="android-review.googlesource.com" revision="refs/tags/android-17.0.0_r1" />
   <remote name="github" fetch="https://github.com" review="review.lineageos.org" />
+  <remote name="freedesktop" fetch="https://gitlab.freedesktop.org" />
   <remote name="private" fetch="ssh://git@github.com" />
   <default remote="github" revision="refs/heads/lineage-24.0" sync-j="4" sync-c="true" />
   <project name="LineageOS/android" path="android" revision="913c6baa35ffa32be9ae33368cac69dbec6ead4b" upstream="refs/heads/lineage-24.0" dest-branch="refs/heads/lineage-24.0" />
@@ -74,7 +75,7 @@
   <project name="LineageOS/android_external_libppd" path="external/libppd" revision="1d50d9fda9df49e37b9d23c481643debd1664110" upstream="refs/heads/lineage-24.0" dest-branch="refs/heads/lineage-24.0" groups="pdk" />
   <project name="LineageOS/android_external_linux-firmware-mainline" path="external/linux-firmware-mainline" revision="ef88d24dfc10e30826789b82fca417d6f913ee2a" upstream="lineage-24.0" dest-branch="lineage-24.0" groups="local::thinksmart" />
   <project name="LineageOS/android_external_lk2nd" path="external/lk2nd" revision="1d53b54c7a8c41f3a5d4b244f9738d954c0109a1" upstream="lineage-24.0" dest-branch="lineage-24.0" groups="local::thinksmart" />
-  <project name="LineageOS/android_external_mesa" path="external/mesa" revision="400e673cf8ba515d3aace56ed3acc3bb300869a5" upstream="lineage-24.0" dest-branch="lineage-24.0" groups="local::thinksmart" />
+  <project name="mesa/mesa" path="external/mesa" remote="freedesktop" revision="b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae" upstream="refs/tags/mesa-26.2.7" clone-depth="1" groups="local::thinksmart" />
   <project name="LineageOS/android_external_minigbm-upstream" path="external/minigbm-upstream" revision="0111c9e1033106dc85899eea1076e4579200d75b" upstream="lineage-24.0" dest-branch="lineage-24.0" groups="local::thinksmart" />
   <project name="LineageOS/android_external_mksh" path="external/mksh" revision="35d7cce387b94c2a33fd3e64a48301552fce7fd5" upstream="refs/heads/lineage-24.0" dest-branch="refs/heads/lineage-24.0" groups="pdk" />
   <project name="LineageOS/android_external_nano" path="external/nano" revision="b83fc23d564c5377fc7c3322e5f75e81d8dad37e" upstream="refs/heads/lineage-24.0" dest-branch="refs/heads/lineage-24.0" />

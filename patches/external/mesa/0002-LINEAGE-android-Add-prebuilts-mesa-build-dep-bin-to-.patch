@@ -1,0 +1,56 @@
+From ad58c5191766ed050875abb1b49744927cc1d51e Mon Sep 17 00:00:00 2001
+From: Yumi Yukimura <me.cafebabe@gmail.com>
+Date: Mon, 13 Jan 2025 17:37:39 +0800
+Subject: [PATCH 02/19] LINEAGE: android: Add prebuilts/mesa-build-dep/bin to
+ $PATH in build recipe
+
+* Add the repository to lineage.dependencies while at it
+
+Change-Id: Ifee0459db06b28b641eb69dc1bcf33ffe6545f38
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Source: https://github.com/LineageOS/android_external_mesa/commit/ad58c5191766ed050875abb1b49744927cc1d51e
+Backport: retain the existing Lineage Android integration on Mesa 26.2.7.
+
+---
+ android/mesa3d_cross.mk |    4 ++--
+ lineage.dependencies    |    6 ++++++
+ 2 files changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/android/mesa3d_cross.mk b/android/mesa3d_cross.mk
+index 8e709a435abb4257de30186ecde31b86598f17ab..63367b04f14757339403323cb67083a7d1d631d3 100644
+--- a/android/mesa3d_cross.mk
++++ b/android/mesa3d_cross.mk
+@@ -83,7 +83,7 @@ MESA3D_GLES_BINS := \
+     $($(M_TARGET_PREFIX)MESA3D_LIBGLESV2_BIN) \
+ 
+ MESON_GEN_NINJA := \
+-	cd $(MESON_OUT_DIR) && PATH=/usr/bin:/usr/local/bin:$$PATH meson ./build     \
++	cd $(MESON_OUT_DIR) && PATH=/usr/bin:/usr/local/bin:$(AOSP_ABSOLUTE_PATH)/prebuilts/mesa-build-dep/bin:$$PATH meson ./build \
+ 	--cross-file $(call relative-to-absolute,$(MESON_GEN_DIR))/aosp_cross        \
+ 	--buildtype=release                                                          \
+ 	-Dplatforms=android                                                          \
+@@ -100,7 +100,7 @@ MESON_GEN_NINJA := \
+ 	-Dandroid-libbacktrace=disabled                                              \
+ 	$(BOARD_MESA3D_MESON_ARGS)                                                   \
+ 
+-MESON_BUILD := PATH=/usr/bin:/bin:/sbin:$$PATH ninja -C $(MESON_OUT_DIR)/build
++MESON_BUILD := PATH=/usr/bin:/bin:/sbin:$(AOSP_ABSOLUTE_PATH)/prebuilts/mesa-build-dep/bin:$$PATH ninja -C $(MESON_OUT_DIR)/build
+ 
+ $(MESON_GEN_FILES_TARGET): MESON_CPU_FAMILY := $(subst arm64,aarch64,$(TARGET_$(M_TARGET_PREFIX)ARCH))
+ 
+diff --git a/lineage.dependencies b/lineage.dependencies
+new file mode 100644
+index 0000000000000000000000000000000000000000..c266052a1d474fea6e8f1f871ff2250c4afab43c
+--- /dev/null
++++ b/lineage.dependencies
+@@ -0,0 +1,6 @@
++[
++  {
++    "repository": "android_prebuilts_mesa-build-dep",
++    "target_path": "prebuilts/mesa-build-dep"
++  }
++]
+-- 
+2.43.0

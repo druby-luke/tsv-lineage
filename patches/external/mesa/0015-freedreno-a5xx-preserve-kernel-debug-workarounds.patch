@@ -1,0 +1,126 @@
+From 9e51275623373e424f0de54a808aef149663bee0 Mon Sep 17 00:00:00 2001
+From: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Date: Sun, 4 Oct 2026 02:07:57 +0300
+Subject: [PATCH 15/19] freedreno/a5xx: stop undoing the kernel's DBG_ECO workarounds
+
+The kernel applies two hardware-specific workarounds in a5xx_hw_init():
+- RB_DBG_ECO_CNTL bit 9 on a505, a506, a508, a509 and a512
+- VPC_DBG_ECO_CNTL bit 23 on those parts and a540.
+
+fd5_emit_restore() rewrites both registers with a530 values on every
+batch, so neither workaround survives the first submit. The a540 path
+already emits the load kill bit, but the generic VPC_DBG_ECO_CNTL write
+that follows it overwrites it again.
+
+Keep the workaround bits on the parts the kernel applies them to, and
+write VPC_DBG_ECO_CNTL once. Also name HLSQ_DBG_ECO_CNTL bit 18, the
+other half of the kernel's LM load kill workaround, LMLOADKILLDIS.
+
+Fixes: f9f89df8bc75 ("freedreno/a5xx: enable a540")
+Assisted-by: LLM
+Signed-off-by: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45481>
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Upstream-commit: 9e51275623373e424f0de54a808aef149663bee0
+Source: https://gitlab.freedesktop.org/mesa/mesa/-/commit/9e51275623373e424f0de54a808aef149663bee0
+Backport: omit the newer computerator tool, which is absent from Mesa 26.2.7; retain the runtime changes and decoder reference updates.
+
+---
+ src/freedreno/registers/adreno/a5xx.xml       |    5 ++-
+ src/gallium/drivers/freedreno/a5xx/fd5_emit.c |   42 ++++++++++++++++++++++---
+ 2 files changed, 41 insertions(+), 6 deletions(-)
+
+diff --git a/src/freedreno/registers/adreno/a5xx.xml b/src/freedreno/registers/adreno/a5xx.xml
+index 549f2794914313bfcb5f5db049aca10a260b22ce..a275460fab7ac11a47c7161cadc34ecd299b1711 100644
+--- a/src/freedreno/registers/adreno/a5xx.xml
++++ b/src/freedreno/registers/adreno/a5xx.xml
+@@ -1512,7 +1512,10 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
+ 
+ 	<reg32 offset="0x0e00" name="HLSQ_TIMEOUT_THRESHOLD_0"/>
+ 	<reg32 offset="0x0e01" name="HLSQ_TIMEOUT_THRESHOLD_1"/>
+-	<reg32 offset="0x0e04" name="HLSQ_DBG_ECO_CNTL"/>
++	<reg32 offset="0x0e04" name="HLSQ_DBG_ECO_CNTL">
++		<!-- named in msm-4.4/kgsl -->
++		<bitfield name="LMLOADKILLDIS" pos="18" type="boolean"/>
++	</reg32>
+ 	<reg32 offset="0x0e05" name="HLSQ_ADDR_MODE_CNTL" type="a5xx_address_mode"/>
+ 	<reg32 offset="0x0e06" name="HLSQ_MODE_CNTL"/> <!-- always 00000001? -->
+ 	<reg32 offset="0x0e10" name="HLSQ_PERFCTR_HLSQ_SEL_0" type="a5xx_hlsq_perfcounter_select"/>
+diff --git a/src/gallium/drivers/freedreno/a5xx/fd5_emit.c b/src/gallium/drivers/freedreno/a5xx/fd5_emit.c
+index 1461824913001a5374706b38902422df9fef2209..7e569d1540ce3863288aee737785a00fc95c5da9 100644
+--- a/src/gallium/drivers/freedreno/a5xx/fd5_emit.c
++++ b/src/gallium/drivers/freedreno/a5xx/fd5_emit.c
+@@ -903,6 +903,38 @@ fd5_emit_cs_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
+       fd5_emit_images(ctx, ring, MESA_SHADER_COMPUTE, cp);
+ }
+ 
++/* Workaround bits the kernel sets in hw_init, which the restore rewrites */
++static bool
++fd5_rb_dp2_clock_gating_disabled(const struct fd_screen *screen)
++{
++   switch (screen->gpu_id) {
++   case 505:
++   case 506:
++   case 508:
++   case 509:
++   case 512:
++      return true;
++   default:
++      return false;
++   }
++}
++
++static bool
++fd5_lm_load_kill_disabled(const struct fd_screen *screen)
++{
++   switch (screen->gpu_id) {
++   case 505:
++   case 506:
++   case 508:
++   case 509:
++   case 512:
++   case 540:
++      return true;
++   default:
++      return false;
++   }
++}
++
+ /* emit setup at begin of new cmdstream buffer (don't rely on previous
+  * state, there could have been a context switch between ioctls):
+  */
+@@ -958,7 +990,8 @@ fd5_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
+    OUT_RING(ring, 0x00000044); /* RB_MODE_CNTL */
+ 
+    OUT_PKT4(ring, REG_A5XX_RB_DBG_ECO_CNTL, 1);
+-   OUT_RING(ring, 0x00100000); /* RB_DBG_ECO_CNTL */
++   OUT_RING(ring, 0x00100000 |
++            COND(fd5_rb_dp2_clock_gating_disabled(ctx->screen), BIT(9)));
+ 
+    OUT_PKT4(ring, REG_A5XX_VFD_MODE_CNTL, 1);
+    OUT_RING(ring, 0x00000000); /* VFD_MODE_CNTL */
+@@ -975,9 +1008,6 @@ fd5_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
+ 
+       OUT_PKT4(ring, REG_A5XX_HLSQ_DBG_ECO_CNTL, 1);
+       OUT_RING(ring, 0x0);
+-
+-      OUT_PKT4(ring, REG_A5XX_VPC_DBG_ECO_CNTL, 1);
+-      OUT_RING(ring, 0x800400);
+    } else {
+       OUT_PKT4(ring, REG_A5XX_SP_DBG_ECO_CNTL, 1);
+       OUT_RING(ring, 0x40000800); /* SP_DBG_ECO_CNTL */
+@@ -991,7 +1021,9 @@ fd5_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
+    OUT_RING(ring, 0x00000000); /* HLSQ_TIMEOUT_THRESHOLD_1 */
+ 
+    OUT_PKT4(ring, REG_A5XX_VPC_DBG_ECO_CNTL, 1);
+-   OUT_RING(ring, 0x00000400); /* VPC_DBG_ECO_CNTL */
++   OUT_RING(ring, A5XX_VPC_DBG_ECO_CNTL_ALLFLATOPTDIS |
++            /* referenced as LMLOADKILLDIS in msm-4.4/kgsl */
++            COND(fd5_lm_load_kill_disabled(ctx->screen), BIT(23)));
+ 
+    OUT_PKT4(ring, REG_A5XX_HLSQ_MODE_CNTL, 1);
+    OUT_RING(ring, 0x00000001); /* HLSQ_MODE_CNTL */
+-- 
+2.43.0

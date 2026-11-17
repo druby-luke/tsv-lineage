@@ -1,0 +1,59 @@
+From 4df9409434a6203ac28bb603b51c747dd8190174 Mon Sep 17 00:00:00 2001
+From: Yumi Yukimura <me.cafebabe@gmail.com>
+Date: Thu, 24 Oct 2024 00:44:49 +0800
+Subject: [PATCH 01/19] LINEAGE: android: Define a phony package that includes
+ all defined mesa3d libs as dependency
+
+Normally, all defined libs are needed for a target that uses mesa3d
+and we have to manually add them to `PRODUCT_PACKAGES`. There
+shouldn't be a module that's defined but unneeded.
+
+After this change, we could build all of them automatically just by
+including `mesa3d` in `PRODUCT_PACKAGES`.
+
+Change-Id: I67c2ef713f595530ba74f989d3874526f3623185
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Source: https://github.com/LineageOS/android_external_mesa/commit/4df9409434a6203ac28bb603b51c747dd8190174
+Backport: retain the existing Lineage Android integration on Mesa 26.2.7.
+
+---
+ android/Android.mk |   10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/android/Android.mk b/android/Android.mk
+index aaddb17a8a4e21865979da25d770bd79786d631e..58d2c1f7777730b7fa79181f52c357d87a9fb12d 100644
+--- a/android/Android.mk
++++ b/android/Android.mk
+@@ -152,11 +152,15 @@ endif
+ 
+ #-------------------------------------------------------------------------------
+ 
++MESA3D_LIBS :=
++
+ # $1: name
+ # $2: subdir
+ # $3: source prebuilt
+ # $4: export headers
+ define mesa3d-lib
++MESA3D_LIBS += $1
++
+ include $(CLEAR_VARS)
+ LOCAL_MODULE_CLASS := SHARED_LIBRARIES
+ LOCAL_MODULE := $1
+@@ -209,6 +213,12 @@ $(eval $(call mesa3d-lib,$(MESA_LIBGBM_NAME),,MESA3D_LIBGBM_BIN,$(MESA3D_TOP)/sr
+ $(eval $(call mesa3d-lib,dri_gbm,,MESA3D_DRI_GBM_BIN))
+ endif
+ 
++include $(CLEAR_VARS)
++LOCAL_MODULE := mesa3d
++LOCAL_MODULE_TAGS := optional
++LOCAL_REQUIRED_MODULES := $(MESA3D_LIBS)
++include $(BUILD_PHONY_PACKAGE)
++
+ #-------------------------------------------------------------------------------
+ 
+ endif
+-- 
+2.43.0

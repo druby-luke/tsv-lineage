@@ -1,0 +1,196 @@
+From a5c42c081044c02f143c42145124112353ea4375 Mon Sep 17 00:00:00 2001
+From: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Date: Wed, 2 Sep 2026 10:47:57 +0300
+Subject: [PATCH 13/19] freedreno/a5xx: convert 2D blits through the right
+ intermediate format
+
+A converting 2D blit wider than a dword comes back wrong on a530: rgba8
+to r8 is correct, rgba32f to r32f is not, and neither is r32f to rg32f.
+The blit was restricted to formats of at most four bytes because of it.
+
+{RB,GRAS}_2D_BLIT_CNTL is written as the constant 0x86000000, and bits
+28:30 of that are the intermediate format the 2D core converts through,
+the same field, with the same encoding, that fd6_ifmt() selects on a6xx.
+The constant holds R2D_UNORM8, so every blit converted through 8-bit
+unorm no matter what it carried, and anything whose channels were not
+8-bit unorm shaped came out wrong.
+
+Describe the register in the XML and derive it from the destination
+format as a6xx does, then drop the size restriction it was hiding
+behind. Measured on a db820c against u_blitter over every ordered pair
+of 20 renderable formats, tiled and linear, with a repeat run as a noise
+control: every pair above a dword (rgba32f to r32f, r32f to rg32f,
+rgba32f to rg32f and the rest) now passes.
+
+The remaining fp16 divergence is unrelated: it corrupts the destination
+by a factor of exactly 2^-16 with the added channel filled with a fixed
+pattern, which is a mis-strided copy rather than a conversion, and it is
+unaffected by this field. Those pairs stay rejected.
+
+Assisted-by: LLM
+Signed-off-by: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45483>
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Upstream-commit: a5c42c081044c02f143c42145124112353ea4375
+Source: https://gitlab.freedesktop.org/mesa/mesa/-/commit/a5c42c081044c02f143c42145124112353ea4375
+
+---
+ src/freedreno/registers/adreno/a5xx.xml          |   10 ++-
+ src/gallium/drivers/freedreno/a5xx/fd5_blitter.c |   84 +++++++++++++++++++---
+ 2 files changed, 82 insertions(+), 12 deletions(-)
+
+diff --git a/src/freedreno/registers/adreno/a5xx.xml b/src/freedreno/registers/adreno/a5xx.xml
+index 3ef1f84d22a94465ec786d99354a822c0843ffad..b8daf9b702fd9bdde34c96594261d480a6fa59d5 100644
+--- a/src/freedreno/registers/adreno/a5xx.xml
++++ b/src/freedreno/registers/adreno/a5xx.xml
+@@ -2752,7 +2752,13 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
+ 		src via sampler, to enable scaling??)  0x2040 also used in this
+ 		case.
+ 	 -->
+-	<reg32 offset="0x2100" name="RB_2D_BLIT_CNTL"/>  <!-- same as 0x2180 -->
++	<bitset name="a5xx_2d_blit_cntl" inline="yes">
++		<bitfield name="ROP" low="23" high="26" type="a3xx_rop_code"/>
++		<bitfield name="IFMT" low="28" high="30" type="adreno_2d_ifmt"/>
++		<bitfield name="UNK31" pos="31" type="boolean"/>
++	</bitset>
++
++	<reg32 offset="0x2100" name="RB_2D_BLIT_CNTL" type="a5xx_2d_blit_cntl"/>
+ 	<reg32 offset="0x2101" name="RB_2D_SRC_SOLID_DW0"/>
+ 	<reg32 offset="0x2102" name="RB_2D_SRC_SOLID_DW1"/>
+ 	<reg32 offset="0x2103" name="RB_2D_SRC_SOLID_DW2"/>
+@@ -2784,7 +2790,7 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
+         <reg32 offset="0x2142" name="RB_2D_SRC_FLAGS_PITCH" shr="6" type="uint"/>
+ 	<reg64 offset="0x2143" name="RB_2D_DST_FLAGS" type="address"/>
+         <reg32 offset="0x2145" name="RB_2D_DST_FLAGS_PITCH" shr="6" type="uint"/>
+-	<reg32 offset="0x2180" name="GRAS_2D_BLIT_CNTL"/> <!-- same as 0x2100 -->
++	<reg32 offset="0x2180" name="GRAS_2D_BLIT_CNTL" type="a5xx_2d_blit_cntl"/>
+ 	<!-- looks same as 0x2107: -->
+ 	<reg32 offset="0x2181" name="GRAS_2D_SRC_INFO" type="a5xx_2d_surf_info"/>
+ 	<!-- looks same as 0x2110: -->
+diff --git a/src/gallium/drivers/freedreno/a5xx/fd5_blitter.c b/src/gallium/drivers/freedreno/a5xx/fd5_blitter.c
+index 45397605ad84487969be7782397a43b89eb510f9..6bb5594b2ed2d976e592c49d899212ffeb941fcb 100644
+--- a/src/gallium/drivers/freedreno/a5xx/fd5_blitter.c
++++ b/src/gallium/drivers/freedreno/a5xx/fd5_blitter.c
+@@ -79,12 +79,6 @@ ok_format_pair(enum pipe_format src, enum pipe_format dst)
+    if (src == dst)
+       return true;
+ 
+-   /* Above a dword the channel selection stops working: rgba8 -> r8 is
+-    * correct but rgba32f -> r32f is not, and neither is r32f -> rg32f.
+-    */
+-   if (util_format_get_blocksize(src) > 4 || util_format_get_blocksize(dst) > 4)
+-      return false;
+-
+    if (sd->layout != UTIL_FORMAT_LAYOUT_PLAIN ||
+        dd->layout != UTIL_FORMAT_LAYOUT_PLAIN)
+       return false;
+@@ -117,6 +111,71 @@ ok_format_pair(enum pipe_format src, enum pipe_format dst)
+    return true;
+ }
+ 
++static enum adreno_2d_ifmt
++fd5_ifmt(enum a5xx_color_fmt fmt)
++{
++   switch (fmt) {
++   case RB5_A8_UNORM:
++   case RB5_R8_UNORM:
++   case RB5_R8_SNORM:
++   case RB5_R8G8_UNORM:
++   case RB5_R8G8_SNORM:
++   case RB5_R8G8B8_UNORM:
++   case RB5_R8G8B8A8_UNORM:
++   case RB5_R8G8B8A8_SNORM:
++   case RB5_R4G4B4A4_UNORM:
++   case RB5_R5G5B5A1_UNORM:
++   case RB5_R5G6B5_UNORM:
++   case RB5_R10G10B10A2_UNORM:
++      return R2D_UNORM8;
++
++   case RB5_R32_UINT:
++   case RB5_R32_SINT:
++   case RB5_R32G32_UINT:
++   case RB5_R32G32_SINT:
++   case RB5_R32G32B32A32_UINT:
++   case RB5_R32G32B32A32_SINT:
++      return R2D_INT32;
++
++   case RB5_R16_UINT:
++   case RB5_R16_SINT:
++   case RB5_R16G16_UINT:
++   case RB5_R16G16_SINT:
++   case RB5_R16G16B16A16_UINT:
++   case RB5_R16G16B16A16_SINT:
++   case RB5_R10G10B10A2_UINT:
++      return R2D_INT16;
++
++   case RB5_R8_UINT:
++   case RB5_R8_SINT:
++   case RB5_R8G8_UINT:
++   case RB5_R8G8_SINT:
++   case RB5_R8G8B8A8_UINT:
++   case RB5_R8G8B8A8_SINT:
++      return R2D_INT8;
++
++   case RB5_R16_UNORM:
++   case RB5_R16_SNORM:
++   case RB5_R16G16_UNORM:
++   case RB5_R16G16_SNORM:
++   case RB5_R16G16B16A16_UNORM:
++   case RB5_R16G16B16A16_SNORM:
++   case RB5_R32_FLOAT:
++   case RB5_R32G32_FLOAT:
++   case RB5_R32G32B32A32_FLOAT:
++      return R2D_FLOAT32;
++
++   case RB5_R16_FLOAT:
++   case RB5_R16G16_FLOAT:
++   case RB5_R16G16B16A16_FLOAT:
++   case RB5_R11G11B10_FLOAT:
++      return R2D_FLOAT16;
++
++   default:
++      return R2D_UNORM8;
++   }
++}
++
+ static bool
+ can_do_blit(const struct pipe_blit_info *info)
+ {
+@@ -183,16 +242,21 @@ can_do_blit(const struct pipe_blit_info *info)
+ }
+ 
+ static void
+-emit_setup(struct fd_ringbuffer *ring)
++emit_setup(struct fd_ringbuffer *ring, enum pipe_format dst_format)
+ {
++   enum a5xx_color_fmt dfmt = fd5_pipe2color(dst_format);
++   uint32_t blit_cntl = A5XX_RB_2D_BLIT_CNTL_ROP(ROP_COPY) |
++                        A5XX_RB_2D_BLIT_CNTL_IFMT(fd5_ifmt(dfmt)) |
++                        A5XX_RB_2D_BLIT_CNTL_UNK31;
++
+    OUT_PKT4(ring, REG_A5XX_RB_RENDER_CNTL, 1);
+    OUT_RING(ring, 0x00000008);
+ 
+    OUT_PKT4(ring, REG_A5XX_RB_2D_BLIT_CNTL, 1);
+-   OUT_RING(ring, 0x86000000); /* RB_2D_BLIT_CNTL */
++   OUT_RING(ring, blit_cntl); /* RB_2D_BLIT_CNTL */
+ 
+    OUT_PKT4(ring, REG_A5XX_GRAS_2D_BLIT_CNTL, 1);
+-   OUT_RING(ring, 0x86000000); /* 2D_BLIT_CNTL */
++   OUT_RING(ring, blit_cntl); /* 2D_BLIT_CNTL */
+ 
+    OUT_PKT4(ring, REG_A5XX_UNKNOWN_2184, 1);
+    OUT_RING(ring, 0x00000009); /* UNKNOWN_2184 */
+@@ -478,7 +542,7 @@ fd5_blitter_blit(struct fd_context *ctx,
+ 
+    fd_batch_update_queries(batch);
+ 
+-   emit_setup(batch->draw);
++   emit_setup(batch->draw, info->dst.format);
+ 
+    if ((info->src.resource->target == PIPE_BUFFER) &&
+        (info->dst.resource->target == PIPE_BUFFER)) {
+-- 
+2.43.0

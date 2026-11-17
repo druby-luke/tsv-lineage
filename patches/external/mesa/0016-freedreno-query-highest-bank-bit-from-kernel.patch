@@ -1,0 +1,95 @@
+From d4b670199d9575e93662c29481c7214e027d6c1e Mon Sep 17 00:00:00 2001
+From: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Date: Thu, 22 Oct 2026 13:53:49 +0300
+Subject: [PATCH 16/19] freedreno: take the highest bank bit from the kernel
+
+While turnip reads HBB value from the kernel since commit 66bdb50736f3
+("tu: Gather UBWC config"), the gallium driver has never been updated to
+retrieve the param. In preparation for making a5xx drivers use HBB for
+register programming, update fd to retrive the param.
+
+Assisted-by: LLM
+Signed-off-by: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45481>
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Upstream-commit: d4b670199d9575e93662c29481c7214e027d6c1e
+Source: https://gitlab.freedesktop.org/mesa/mesa/-/commit/d4b670199d9575e93662c29481c7214e027d6c1e
+
+---
+ src/freedreno/drm/freedreno_drmif.h              |    1 +
+ src/freedreno/drm/msm/msm_pipe.c                 |    2 ++
+ src/freedreno/drm/virtio/virtio_pipe.c           |    3 +++
+ src/gallium/drivers/freedreno/freedreno_screen.c |    4 ++++
+ src/gallium/drivers/freedreno/freedreno_screen.h |    1 +
+ 5 files changed, 11 insertions(+)
+
+diff --git a/src/freedreno/drm/freedreno_drmif.h b/src/freedreno/drm/freedreno_drmif.h
+index ecb84aa57f81228e64e8bfc35eff403c792e0003..4f96c150e9098807aa1c6cc48318e650b1441eb0 100644
+--- a/src/freedreno/drm/freedreno_drmif.h
++++ b/src/freedreno/drm/freedreno_drmif.h
+@@ -48,6 +48,7 @@ enum fd_param_id {
+    FD_SYSPROF,       /* Settable (for CAP_SYS_ADMIN) param for system profiling */
+    FD_VA_SIZE,       /* GPU virtual address size */
+    FD_UCHE_TRAP_BASE,
++   FD_HIGHEST_BANK_BIT,
+ };
+ 
+ /**
+diff --git a/src/freedreno/drm/msm/msm_pipe.c b/src/freedreno/drm/msm/msm_pipe.c
+index c80f1b30f692083344143ade690a8d9b6f8c4f67..d81944ee00778aa25ab71ca58c94ac08913cdf8f 100644
+--- a/src/freedreno/drm/msm/msm_pipe.c
++++ b/src/freedreno/drm/msm/msm_pipe.c
+@@ -86,6 +86,8 @@ msm_pipe_get_param(struct fd_pipe *pipe, enum fd_param_id param,
+       return query_param(pipe, MSM_PARAM_VA_SIZE, value);
+    case FD_UCHE_TRAP_BASE:
+       return query_param(pipe, MSM_PARAM_UCHE_TRAP_BASE, value);
++   case FD_HIGHEST_BANK_BIT:
++      return query_param(pipe, MSM_PARAM_HIGHEST_BANK_BIT, value);
+    default:
+       ERROR_MSG("invalid param id: %d", param);
+       return -1;
+diff --git a/src/freedreno/drm/virtio/virtio_pipe.c b/src/freedreno/drm/virtio/virtio_pipe.c
+index d76b1adabb5a8908d37a95d45aeca513b50f4e2b..2f50cb15788679a814d6f02af01d31090fd05bed 100644
+--- a/src/freedreno/drm/virtio/virtio_pipe.c
++++ b/src/freedreno/drm/virtio/virtio_pipe.c
+@@ -90,6 +90,9 @@ virtio_pipe_get_param(struct fd_pipe *pipe, enum fd_param_id param,
+       return 0;
+    case FD_UCHE_TRAP_BASE:
+       return query_param(pipe, MSM_PARAM_UCHE_TRAP_BASE, value);
++   case FD_HIGHEST_BANK_BIT:
++      *value = virtio_dev->vdrm->caps.u.msm.highest_bank_bit;
++      return 0;
+    default:
+       ERROR_MSG("invalid param id: %d", param);
+       return -1;
+diff --git a/src/gallium/drivers/freedreno/freedreno_screen.c b/src/gallium/drivers/freedreno/freedreno_screen.c
+index e33674e662c3d4e907a255c8fef47cea346dfd84..d1820813a1196d7e4ae066a56ded9ebe4dc42f1d 100644
+--- a/src/gallium/drivers/freedreno/freedreno_screen.c
++++ b/src/gallium/drivers/freedreno/freedreno_screen.c
+@@ -1062,6 +1062,10 @@ fd_screen_create(int fd,
+    screen->dev_info = info;
+    screen->info = &screen->dev_info;
+ 
++   if (fd_pipe_get_param(screen->pipe, FD_HIGHEST_BANK_BIT, &val) || !val)
++      val = screen->info->highest_bank_bit;
++   screen->highest_bank_bit = val;
++
+    switch (screen->gen) {
+    case 2:
+       fd2_screen_init(pscreen);
+diff --git a/src/gallium/drivers/freedreno/freedreno_screen.h b/src/gallium/drivers/freedreno/freedreno_screen.h
+index f9e239ab1296419186a145969182df1eade410ca..e477019937e6f9531ba6a12126f5022f9bdd37a6 100644
+--- a/src/gallium/drivers/freedreno/freedreno_screen.h
++++ b/src/gallium/drivers/freedreno/freedreno_screen.h
+@@ -63,6 +63,7 @@ struct fd_screen {
+    uint32_t gmemsize_bytes;
+ 
+    uint64_t uche_trap_base;
++   uint32_t highest_bank_bit;
+ 
+    const struct fd_dev_id *dev_id;
+    uint8_t gen;      /* GPU (major) generation */
+-- 
+2.43.0

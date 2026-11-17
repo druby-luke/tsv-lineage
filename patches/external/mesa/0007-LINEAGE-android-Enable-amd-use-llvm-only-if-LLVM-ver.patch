@@ -1,0 +1,38 @@
+From 57c73e477cb5392750b52ee0dd8e9abeeca85f9e Mon Sep 17 00:00:00 2001
+From: Yumi Yukimura <me.cafebabe@gmail.com>
+Date: Fri, 17 Apr 2026 15:50:49 +0800
+Subject: [PATCH 07/19] LINEAGE: android: Enable `amd-use-llvm` only if LLVM
+ version is >= 18.0.0
+
+on meson.build:
+```
+if (with_amd_vk or with_gallium_radeonsi) and amd_with_llvm
+  _llvm_version = '>= 18.0.0'
+```
+
+Change-Id: I0463d8d74ee1b188226e18a422666832f94db71a
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Source: https://github.com/LineageOS/android_external_mesa/commit/57c73e477cb5392750b52ee0dd8e9abeeca85f9e
+Backport: retain the existing Lineage Android integration on Mesa 26.2.7.
+
+---
+ android/mesa3d_cross.mk |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/android/mesa3d_cross.mk b/android/mesa3d_cross.mk
+index c9c900803563ae0e41750f7e851c49d0f71cf6c8..a5c96a59e9c224965e0c25376a505239a2705d51 100644
+--- a/android/mesa3d_cross.mk
++++ b/android/mesa3d_cross.mk
+@@ -94,7 +94,7 @@ MESON_GEN_NINJA := \
+ 	-Dgbm-backends-path=/vendor/$(MESA3D_LIB_DIR)                                \
+ 	-Degl=$(if $(BOARD_MESA3D_GALLIUM_DRIVERS),enabled,disabled)                 \
+ 	-Dllvm=$(if $(MESON_GEN_LLVM_STUB),enabled,disabled)                         \
+-	-Damd-use-llvm=$(if $(MESON_GEN_LLVM_STUB),true,false)                       \
++	-Damd-use-llvm=$(if $(MESON_GEN_LLVM_STUB),$(or $(call math_gt_or_eq,$(LLVM_VERSION_MAJOR),18),false),false) \
+ 	-Damdgpu-virtio=$(if $(filter true,$(BOARD_MESA3D_AMDGPU_VIRTIO)),true,false)\
+ 	-Dcpp_rtti=false                                                             \
+ 	-Dlmsensors=disabled                                                         \
+-- 
+2.43.0
