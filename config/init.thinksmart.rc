@@ -35,3 +35,15 @@ on post-fs-data
 # Measured on CD-18781Y (2026-11-15): launcher jank 48% -> 16%, Settings p50 19 -> 12 ms, no visible artifacts.
 on property:init.svc.vendor.msm_drm_quirks=stopped
     setprop vendor.mesa.fd.mesa.debug ""
+
+# Mains-powered panel: no CPU power collapse, only WFI. Waking from power collapse costs up to
+# 270 us and cold caches; measured -8% cold app start, -20% median frame time, same temperature.
+on boot
+    write /sys/devices/system/cpu/cpu0/cpuidle/state1/disable 1
+    write /sys/devices/system/cpu/cpu1/cpuidle/state1/disable 1
+    write /sys/devices/system/cpu/cpu2/cpuidle/state1/disable 1
+    write /sys/devices/system/cpu/cpu3/cpuidle/state1/disable 1
+    write /sys/devices/system/cpu/cpu4/cpuidle/state1/disable 1
+    write /sys/devices/system/cpu/cpu5/cpuidle/state1/disable 1
+    write /sys/devices/system/cpu/cpu6/cpuidle/state1/disable 1
+    write /sys/devices/system/cpu/cpu7/cpuidle/state1/disable 1
