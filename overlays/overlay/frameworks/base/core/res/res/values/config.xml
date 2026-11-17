@@ -4,6 +4,8 @@
     <bool name="config_supportsHardwareMicToggle">true</bool>
     <!-- Fixed wall/desk panel: never laid face down; avoid an extra accelerometer listener. -->
     <bool name="config_flipToScreenOffEnabled">false</bool>
+    <!-- The privacy slider is a power button here: opening it must not also launch the camera app. -->
+    <bool name="config_launchCameraOnCameraLensCoverToggle">false</bool>
     <bool name="config_automatic_brightness_available">true</bool>
     <integer-array name="config_autoBrightnessLevels">
         <item>1</item>
