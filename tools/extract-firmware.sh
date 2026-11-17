@@ -2,10 +2,15 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 --stock MODEM.img VENDOR.img SPEAKER.bin OUTPUT_DIR" >&2
-    echo "       $0 --android-vendor VENDOR.img OUTPUT_DIR" >&2
+    echo "Usage: $0 [--allow-unknown] --stock MODEM.img VENDOR.img SPEAKER.bin OUTPUT_DIR" >&2
+    echo "       $0 [--allow-unknown] --android-vendor VENDOR.img OUTPUT_DIR" >&2
     exit 2
 }
+allow_unknown=false
+if [[ ${1:-} == --allow-unknown ]]; then
+    allow_unknown=true
+    shift
+fi
 [[ $# -gt 0 ]] || usage
 mode=$1
 case "$mode" in
@@ -26,6 +31,13 @@ case "$mode" in
 esac
 command -v debugfs >/dev/null
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+manifests=("$root"/config/firmware-*.sha256)
+[[ -f "${manifests[0]}" ]] || {
+    echo "No firmware checksum manifests found." >&2
+    exit 1
+}
+# All manifests describe the same required paths.
+inventory=${manifests[0]}
 [[ ! -e "$output" && ! -L "$output" ]] || {
     echo "Output exists; refusing to replace firmware: $output" >&2
     exit 1
@@ -48,7 +60,7 @@ dump_vendor() {
 if [[ "$mode" == --android-vendor ]]; then
     while read -r _checksum name; do
         dump_vendor "/firmware/$name" "$work/$name"
-    done < "$root/config/firmware.sha256"
+    done < "$inventory"
 else
     while read -r source name; do
         mkdir -p "$(dirname -- "$work/$name")"
@@ -72,10 +84,33 @@ else
     rmdir "$work/.wifi-raw"
     cp "$speaker" "$work/tas5728m_dsp_lenovo_cd-18781y.bin"
 fi
-(cd "$work" && sha256sum --check "$root/config/firmware.sha256")
+while read -r _checksum name; do
+    [[ -s "$work/$name" ]] || {
+        echo "Missing or empty firmware: $name" >&2
+        exit 1
+    }
+done < "$inventory"
+
+matched_manifest=
+for manifest in "${manifests[@]}"; do
+    if (cd "$work" && sha256sum --status --check "$manifest"); then
+        matched_manifest=$(basename -- "$manifest")
+        break
+    fi
+done
+if [[ -n "$matched_manifest" ]]; then
+    echo "Firmware checksums match $matched_manifest."
+elif "$allow_unknown"; then
+    echo "WARNING: Accepting an unknown firmware set because --allow-unknown was specified." >&2
+    echo "Required files are present and nonempty; their integrity and compatibility are not verified." >&2
+else
+    echo "Firmware does not match a known complete set." >&2
+    echo "Use --allow-unknown only to accept unqualified firmware deliberately." >&2
+    exit 1
+fi
 mv -T --no-clobber "$work" "$output"
 if [[ -d "$work" ]]; then
     echo "Output appeared during extraction; refusing to replace it: $output" >&2
     exit 1
 fi
-echo "Extracted verified firmware to $output; input images were not modified."
+echo "Extracted firmware to $output; input images were not modified."

@@ -40,7 +40,7 @@ with enforcing SELinux and verified boot disabled. The inherited userdebug
 | Community kernel configuration | `upstream/xiaomi-mainline` Git submodule |
 | Maintained codec sources | `drivers/tas5782m`; copied with attribution and local fixes |
 | Changes to upstream projects | `patches/<Android project path>/0001-description.patch` |
-| Private firmware | 29 files checked against [firmware.sha256](config/firmware.sha256); not distributed |
+| Private firmware | 29 files; recorded checksums for [200628.084](config/firmware-CD_18781Y.200628.084.sha256) and [210228.109](config/firmware-CD_18781Y.210228.109.sha256); not distributed |
 | Build host | x86-64 Linux; dependencies in [Dockerfile](Dockerfile); budget **350 GiB free** |
 | Installation | Stock GPT and working [EDL](https://github.com/bkerler/edl) setup; see [FLASHING.md](FLASHING.md) |
 
