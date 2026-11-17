@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Tue, 17 Nov 2026 10:30:00 -0800
+Subject: [PATCH] sepolicy: allow camera EGL configuration reads
+
+Origin: Local ThinkSmart View port
+Source: https://github.com/LineageOS/android_device_mainline_common
+License: Apache-2.0 (modified upstream sources)
+Base-commit: f49f55117276cc2603fd7f6aeb78b859535f8e8d
+
+Libcamera initializes EGL for the software ISP's GPU debayer path. Mesa
+reads vendor.mesa configuration, and GraphicsEnv initialization reads
+ro.zygote.disable_gl_preload even outside a zygote process.
+
+Allow those typed property reads without granting the much broader
+default_prop access requested by optional legacy Mesa/minigbm probes.
+Do not use gpu_access here: these missing property reads do not require
+additional device-node or sysfs permissions.
+
+--- a/sepolicy/vendor/hal_camera_default.te
++++ b/sepolicy/vendor/hal_camera_default.te
+@@ -1,5 +1,9 @@
+ # vendor.camera.* configuration
+ get_prop(hal_camera_default, vendor_camera_prop)
+ 
++# Mesa and GraphicsEnv configuration used by libcamera's EGL path.
++get_prop(hal_camera_default, vendor_mesa_prop)
++get_prop(hal_camera_default, zygote_config_prop)
++
+ # Camera hotplug: list and watch /dev for video nodes
+ allow hal_camera_default device:dir { r_dir_perms watch };
