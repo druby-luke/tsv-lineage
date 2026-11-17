@@ -45,6 +45,7 @@ BOARD_KERNEL_CMDLINE := \
     androidboot.verifiedbootstate=orange \
     panic=10 \
     reboot=warm \
+    pstore.compress=none \
     lk2nd.pass-simplefb=relocate,autorefresh
 
 THINKSMART_BOOT_CONSOLE ?= false
