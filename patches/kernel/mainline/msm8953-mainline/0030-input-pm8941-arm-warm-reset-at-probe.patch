@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Mon, 16 Nov 2026 18:29:15 -0800
+Subject: [PATCH] Input: pm8941-pwrkey - arm warm reset during probe
+
+The reboot notifier selects the PMIC's PS_HOLD reset type, but a panic
+reaches emergency_restart() without calling blocking reboot notifiers.
+On a cold-started ThinkSmart View, hardware readback shows reset type 0x08
+even though reboot=warm selected REBOOT_WARM. Normal warm reboots preserve
+ramoops without ECC errors, whereas a panic after cold startup does not.
+
+When warm reboot is requested, program that reset type during probe as
+well. Reuse the existing sleepable configuration path rather than trying
+to perform regmap operations from a panic notifier. The reboot notifier
+continues to select the requested action for normal reboot and poweroff;
+other default reboot modes are unchanged.
+
+Source: local device integration, not an upstream backport.
+Base: msm8953-mainline/linux 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429,
+with this device's preceding kernel patches applied.
+---
+ drivers/input/misc/pm8941-pwrkey.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/drivers/input/misc/pm8941-pwrkey.c b/drivers/input/misc/pm8941-pwrkey.c
+index 53249d2c0..a065b2789 100644
+--- a/drivers/input/misc/pm8941-pwrkey.c
++++ b/drivers/input/misc/pm8941-pwrkey.c
+@@ -401,6 +401,14 @@ static int pm8941_pwrkey_probe(struct platform_device *pdev)
+ 				error);
+ 			return error;
+ 		}
++
++		/*
++		 * Panic restart bypasses reboot notifiers. Arm warm reset now
++		 * so emergency restarts can preserve retained crash logs.
++		 */
++		if (reboot_mode == REBOOT_WARM)
++			pm8941_reboot_notify(&pwrkey->reboot_notifier,
++					    SYS_RESTART, NULL);
+ 	}
+ 
+ 	wakeup = pwrkey->data->wakeup_source_default ||
+-- 
+2.56.1

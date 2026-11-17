@@ -65,6 +65,26 @@ userdata/cache/metadata images, **erasing user data and Android metadata**.
 Both preserve GPT, aboot, persist and radio firmware. OTA ZIP installation is
 not supported.
 
+## Crash logs
+
+Ramoops uses 1 MiB of reserved RAM to retain crash records and the kernel
+console across warm reboots, **not cold resets or power loss**. Kernel panics
+request a warm reboot after 10 seconds; the hardware watchdog can also reset a
+hung system.
+Collect logs after an unexpected reboot, before rebooting again:
+
+```sh
+adb root
+adb wait-for-device
+adb pull /sys/fs/pstore crash-pstore
+adb shell dumpsys dropbox --print SYSTEM_LAST_KMSG > last-kmsg.txt
+adb unroot
+```
+
+Android also archives the console tail in `SYSTEM_LAST_KMSG`. These are
+diagnostic logs, not a full memory dump; a hard lockup may leave only the last
+console messages. Keep collected logs private.
+
 ## Source credits and licensing
 
 External Android/kernel projects are synced with Android `repo`, not copied

@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Mon, 16 Nov 2026 17:53:50 -0800
+Subject: [PATCH] arm64: dts: qcom: reserve crash-log RAM on ThinkSmart View
+
+The kernel enables pstore, but without a reserved RAM backend no kernel
+logs survive a reset. Reserve 1 MiB outside the firmware and framebuffer
+carveouts for panic records, the kernel console and userspace messages.
+Use ECC to help recover records after an unclean warm reset.
+
+Source: local device integration, not an upstream backport.
+Base: msm8953-mainline/linux 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429,
+with this device's preceding kernel patches applied.
+---
+ arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+index a3674f565..be5b671a3 100644
+--- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
++++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+@@ -142,6 +142,16 @@
+ 	reserved-memory {
+ 		/* part of modem node removal */
+ 		/delete-node/ rmtfs@f2d00000;
+ 
++		ramoops@9ff00000 {
++			compatible = "ramoops";
++			reg = <0x0 0x9ff00000 0x0 0x100000>;
++			record-size = <0x20000>;
++			console-size = <0x80000>;
++			pmsg-size = <0x20000>;
++			ecc-size = <16>;
++			no-map;
++		};
++
+ 		cont_splash_mem: cont-splash@90001000 {
+ 			reg = <0x0 0x90001000 0x0 (800 * 1280 * 3)>;
+-- 
+2.56.1
+

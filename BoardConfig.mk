@@ -43,7 +43,8 @@ BOARD_KERNEL_CMDLINE := \
     $(MAINLINE_QCOM_SOC_KERNEL_PARAMS) \
     androidboot.hardware=thinksmart \
     androidboot.verifiedbootstate=orange \
-    panic=0 \
+    panic=10 \
+    reboot=warm \
     lk2nd.pass-simplefb=relocate,autorefresh
 
 THINKSMART_BOOT_CONSOLE ?= false
