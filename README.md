@@ -68,8 +68,7 @@ not supported.
 ## Home Assistant wall panel
 
 Kiosk Satellite runs on this build. See [KIOSK-SATELLITE.md](KIOSK-SATELLITE.md)
-for the right APK, a setting that makes it much smoother on this GPU, and
-setup tips.
+for the right APK and a setting that makes it much smoother on this GPU.
 
 ## Crash logs
 
