@@ -24,15 +24,14 @@ mkdir android-tsv
 cd android-tsv
 ```
 
-Run the remaining build commands from the Android source root in the same Bash
-session. In Docker, that is `/android`.
+Run the remaining build commands from a new Android source root in the same
+Bash session. In Docker, that is `/android`.
 
 ## 2. Fetch sources and apply patches
 
 ```sh
-repo init -u https://github.com/LineageOS/android.git -b lineage-24.0 --git-lfs
 DEVICE=device/lenovo/thinksmart
-mkdir -p device/lenovo .repo/local_manifests
+mkdir -p device/lenovo
 git clone --recurse-submodules https://github.com/salaman/tsv-lineage.git "$DEVICE"
 ```
 
@@ -46,10 +45,12 @@ git -C "$DEVICE" submodule update --init --recursive
 Outside Docker, replace `/integration` with this checkout's absolute path.
 Use a real device directory, not a symlink.
 
-Sync the platform and kernel, then apply the patch queues:
+Commit any local device-tree edits, then sync sources and apply the patch queues:
 
 ```sh
-cp "$DEVICE/manifests/thinksmart.xml" .repo/local_manifests/
+SOURCE_REV=$(git -C "$DEVICE" rev-parse HEAD)
+repo init -u "file://$PWD/$DEVICE" \
+  -b "$SOURCE_REV" -m manifests/locked.xml --git-lfs
 repo sync -c --no-tags --no-clone-bundle --fail-fast -j4
 bash "$DEVICE/tools/apply-patches.sh" "$PWD"
 ```
@@ -57,7 +58,6 @@ bash "$DEVICE/tools/apply-patches.sh" "$PWD"
 Apply queues **once to clean projects**. Patches run in numbered filename order
 within each project, starting at `0001`; there are no `series` files. The helper
 leaves uncommitted changes and stops on errors without resetting sources.
-Branch-tracking dependencies can change.
 
 Scripts and patches require LF line endings; `.gitattributes` enforces this
 for new checkouts.

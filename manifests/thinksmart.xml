@@ -21,5 +21,5 @@
   <project name="LineageOS/android_hardware_linaro_libpm" path="hardware/linaro/libpm" remote="github" revision="d062161c81d3d2b61b27425c2e39c728eab7f9f0" upstream="refs/heads/lineage-24.0" clone-depth="1" />
   <project name="LineageOS/android_hardware_intel_sensors-iio" path="hardware/intel/sensors-iio" remote="github" revision="b5134567f8b8bce819b3686d045acfc120e0159f" upstream="refs/heads/lineage-24.0" clone-depth="1" />
   <project name="LineageOS/android_external_lk2nd" path="external/lk2nd" remote="github" revision="lineage-24.0" />
-  <project name="msm8953-mainline/linux" path="kernel/mainline/msm8953-mainline" remote="github" revision="755ffc44d5d8442adeec8bbaa02108478089c4d7" upstream="refs/heads/barni2000/7.3/develop" clone-depth="1" />
+  <project name="msm8953-mainline/linux" path="kernel/mainline/msm8953-mainline" remote="github" revision="1c1a919fd728c881e7ccaf3cf18a3cf3055e0429" upstream="refs/heads/barni2000/7.3/develop" clone-depth="1" />
 </manifest>
