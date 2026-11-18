@@ -32,6 +32,22 @@
       "HoldFd": false,
       "WriteOnly": true,
       "AllowFailure": false
+    },
+    {
+      "Name": "CPUIdleLatency",
+      "Paths": [
+        "/dev/cpu_dma_latency"
+      ],
+      "Values": [
+        "c8",
+        "-1"
+      ],
+      "DefaultIndex": 1,
+      "ResetOnInit": false,
+      "Truncate": false,
+      "HoldFd": true,
+      "WriteOnly": true,
+      "AllowFailure": false
     }
   ],
   "Actions": [
@@ -46,6 +62,17 @@
       "Node": "GPUMinFrequency",
       "Duration": 1000,
       "Value": "650000000"
+    },
+    {
+      "PowerHint": "INTERACTION",
+      "Type": "DoHint",
+      "Value": "INTERACTION_IDLE_LATENCY"
+    },
+    {
+      "PowerHint": "INTERACTION_IDLE_LATENCY",
+      "Node": "CPUIdleLatency",
+      "Duration": 250,
+      "Value": "c8"
     },
     {
       "PowerHint": "LAUNCH",
