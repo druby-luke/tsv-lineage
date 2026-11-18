@@ -13,6 +13,21 @@ Run commands from the image directory. Verify the stock partition layout below
 and `SHA256SUMS` before writing; stop on any mismatch. If needed, add
 `--loader=/private/programmer.bin` to the commands.
 
+### Entering EDL
+
+From a running build with USB debugging enabled, no buttons are needed:
+
+```sh
+adb reboot bootloader     # lk2nd fastboot
+fastboot oem reboot-edl   # lk2nd -> Qualcomm EDL (05c6:9008)
+```
+
+`adb reboot edl` does not work on these builds; it boots normally. Let each
+fastboot command finish: an interrupted command can leave lk2nd unresponsive
+until the power is unplugged. The lk2nd menu also has an EDL entry, and the
+button method still works: unplug power, hold both volume keys, plug power
+back in.
+
 Keep original backups outside the image set, including GPT, OEM and persist.
 Back up each partition before its first replacement:
 
