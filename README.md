@@ -1,8 +1,10 @@
-> **Fork by [druby-luke](https://github.com/druby-luke), branch `tsv-dev`.** Changes compared to [salaman/tsv-lineage](https://github.com/salaman/tsv-lineage):
-> - **Mic-mute button + camera slider as power button**: new `buttons/tsv-buttons` service (uinput KEY_POWER, EPOLLWAKEUP), `sepolicy/tsv_buttons.te`, kernel patch `0034` (gpio-keys `wakeup-source`)
-> - **Mesa GMEM rendering** on the Adreno 506 (overrides the qcom-common `sysmem` quirk in `config/init.thinksmart.rc`): launcher jank 48% → 16%, Settings p50 19 → 12 ms (GMEM alone; with 0.5× animations launcher 8%)
-> - **Animations 0.5× and no blur** as defaults (SettingsProvider overlay, `ro.surface_flinger.supports_background_blur=0`)
-> - **Build fix**: timekeep seapp_contexts patch removed (merged upstream as `f6b2914`)
+> **Fork by [druby-luke](https://github.com/druby-luke), branch `tsv-dev`.** Changes compared to [salaman/tsv-lineage](https://github.com/salaman/tsv-lineage) `main`:
+> - **Mic-mute button and camera slider as power button**, configurable in Settings > System > Buttons: `buttons/tsv-buttons` service (uinput KEY_POWER, EPOLLWAKEUP), `tsvsettings/`, `sepolicy/tsv_buttons.te`, kernel patch `0034` (gpio-keys `wakeup-source`). Opening the slider no longer launches the camera app. (PR #3)
+> - **CPU idle-latency limit also during app launches**, and held for 400 ms instead of 250 ms after a touch (`config/powerhint.json`, on top of upstream's PM QoS hint): Settings/Glimpse cold start about 8%/6% faster, idle unchanged. (PR #7)
+> - **Settings in single pane in portrait**, two-pane only in landscape. (PR #6)
+> - **Animations 0.5x and no blur** as defaults (SettingsProvider overlay, `ro.surface_flinger.supports_background_blur=0`)
+> - **Auto-rotate off by default**, **Aperture** camera app added, **LineageOS Updater removed** (no OTA server)
+> - `system_server` and Settings compiled with `speed` at build time, `pm.dexopt.install=speed`; `pstore.compress=none` on the kernel command line
 
 # ThinkSmart View: mainline LineageOS
 
